@@ -2,9 +2,35 @@
 const router = express.Router()
 const supabase = require('../supabase')
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
-//  POST /orders â€” ط¥ظ†ط´ط§ط، ط·ظ„ط¨ ط¬ط¯ظٹط¯
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  حساب المسافة بين نقطتين (كم) — Haversine
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function calcDistanceKm(lat1, lng1, lat2, lng2) {
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  حساب رسوم التوصيل حسب المسافة
+//  أول 4.99 كم = 10 ريال ثابت، بعدها +1 ريال لكل كم إضافي
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function calcDeliveryFee(distanceKm) {
+  if (distanceKm == null) return 10.00 // احتياطي إذا ما توفرت الإحداثيات
+  if (distanceKm <= 4.99) return 10.00
+  return parseFloat((10 + Math.ceil(distanceKm - 4.99)).toFixed(2))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /orders — إنشاء طلب جديد
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/', async (req, res) => {
   try {
     const {
@@ -15,15 +41,16 @@ router.post('/', async (req, res) => {
       delivery_lat,
       delivery_lng,
       payment_method,
-      notes
+      notes,
+      order_type // 'instant' | 'preorder' — اختياري، افتراضياً instant
     } = req.body
 
     if (!customer_id || !chef_id) {
-      return res.status(400).json({ success: false, message: 'ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¹ظ…ظٹظ„ ط£ظˆ ط§ظ„ط´ظٹظپ ظ†ط§ظ‚طµط©' })
+      return res.status(400).json({ success: false, message: 'بيانات العميل أو الشيف ناقصة' })
     }
 
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: 'ط§ظ„ط³ظ„ط© ظپط§ط±ط؛ط©' })
+      return res.status(400).json({ success: false, message: 'السلة فارغة' })
     }
 
     const itemIds = items.map(i => i.menu_item_id).filter(Boolean)
@@ -40,7 +67,7 @@ router.post('/', async (req, res) => {
     const orderItems = items.map(item => {
       const menuItem = menuItems.find(m => m.id === item.menu_item_id)
 
-      if (!menuItem) throw new Error('ط£ط­ط¯ ط§ظ„ظ…ظ†طھط¬ط§طھ ط؛ظٹط± ظ…ظˆط¬ظˆط¯')
+      if (!menuItem) throw new Error('أحد المنتجات غير موجود')
 
       const quantity = Number(item.quantity || 1)
       const price = Number(menuItem.price || 0)
@@ -57,14 +84,30 @@ router.post('/', async (req, res) => {
       }
     })
 
-    const isPickup = delivery_address === 'ط§ط³طھظ„ط§ظ… ط´ط®طµظٹ'
-    const delivery_fee = isPickup ? 0 : 10.00
+    const isPickup = delivery_address === 'استلام شخصي'
+
+    // جلب إحداثيات الشيف لحساب المسافة
+    const { data: chefLocation } = await supabase
+      .from('chefs')
+      .select('lat, lng, user_id')
+      .eq('id', chef_id)
+      .single()
+
+    const distance_km = isPickup
+      ? 0
+      : calcDistanceKm(
+          chefLocation?.lat, chefLocation?.lng,
+          delivery_lat, delivery_lng
+        )
+
+    const delivery_fee = isPickup ? 0 : calcDeliveryFee(distance_km)
 
     const platform_fee_order    = parseFloat((subtotal * 0.17).toFixed(2))
-    const platform_fee_delivery = isPickup ? 0 : parseFloat((delivery_fee * 0.10).toFixed(2))
+    // عمولة التوصيل: 10% مقرّبة للأعلى لصالح زعفران، الباقي (بما فيه الكسور) للمندوب
+    const platform_fee_delivery = isPickup ? 0 : Math.ceil(delivery_fee * 0.10)
     const platform_fee          = parseFloat((platform_fee_order + platform_fee_delivery).toFixed(2))
     const chef_share            = parseFloat((subtotal * 0.83).toFixed(2))
-    const driver_share          = isPickup ? 0 : parseFloat((delivery_fee * 0.90).toFixed(2))
+    const driver_share          = isPickup ? 0 : parseFloat((delivery_fee - platform_fee_delivery).toFixed(2))
     const total                 = parseFloat((subtotal + delivery_fee).toFixed(2))
 
     const { data: order, error: orderErr } = await supabase
@@ -75,6 +118,8 @@ router.post('/', async (req, res) => {
         delivery_address,
         delivery_lat,
         delivery_lng,
+        distance_km: distance_km != null ? parseFloat(distance_km.toFixed(2)) : null,
+        order_type: order_type === 'preorder' ? 'preorder' : 'instant',
         subtotal,
         delivery_fee,
         platform_fee,
@@ -95,17 +140,11 @@ router.post('/', async (req, res) => {
     const { error: itemsErr } = await supabase.from('order_items').insert(itemsWithOrder)
     if (itemsErr) throw itemsErr
 
-    const { data: chef } = await supabase
-      .from('chefs')
-      .select('user_id')
-      .eq('id', chef_id)
-      .single()
-
-    if (chef) {
+    if (chefLocation) {
       await supabase.from('notifications').insert({
-        user_id: chef.user_id,
-        title: 'ط·ظ„ط¨ ط¬ط¯ظٹط¯',
-        body: `ظˆطµظ„ظƒ ط·ظ„ط¨ ط¬ط¯ظٹط¯ ط¨ظ‚ظٹظ…ط© ${total} ط±ظٹط§ظ„`,
+        user_id: chefLocation.user_id,
+        title: 'طلب جديد',
+        body: `وصلك طلب جديد بقيمة ${total} ريال`,
         type: 'order_new',
         data: { order_id: order.id }
       })
@@ -117,9 +156,9 @@ router.post('/', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/customer/:id
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/customer/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -135,9 +174,9 @@ router.get('/customer/:id', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/chef/:id
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/chef/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -153,9 +192,9 @@ router.get('/chef/:id', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders?status=ready
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/', async (req, res) => {
   try {
     const { status } = req.query
@@ -174,9 +213,9 @@ router.get('/', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/:id
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -192,16 +231,16 @@ router.get('/:id', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /orders/:id/status
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body
     const validStatuses = ['accepted','preparing','ready','delivering','delivered','cancelled']
 
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: 'ط­ط§ظ„ط© ط؛ظٹط± طµط­ظٹط­ط©' })
+      return res.status(400).json({ success: false, message: 'حالة غير صحيحة' })
     }
 
     const updates = { status }
@@ -218,8 +257,8 @@ router.patch('/:id/status', async (req, res) => {
 
     if (error) throw error
 
-    // â”پâ”پâ”پ ظ…ظ†ط·ظ‚ طھط¹ظٹظٹظ† ط§ظ„ظ…ظ†ط¯ظˆط¨ ط¹ظ†ط¯ ready â”پâ”پâ”پ
-    if (status === 'ready' && order.delivery_address !== 'ط§ط³طھظ„ط§ظ… ط´ط®طµظٹ') {
+    // ━━━ منطق تعيين المندوب عند ready ━━━
+    if (status === 'ready' && order.delivery_address !== 'استلام شخصي') {
       const { data: availableDrivers } = await supabase
         .from('drivers')
         .select('id, user_id')
@@ -228,15 +267,15 @@ router.patch('/:id/status', async (req, res) => {
       if (availableDrivers && availableDrivers.length > 0) {
         const driverNotifications = availableDrivers.map(driver => ({
           user_id: driver.user_id,
-          title: 'ط·ظ„ط¨ طھظˆطµظٹظ„ ط¬ط¯ظٹط¯',
-          body: 'ظٹظˆط¬ط¯ ط·ظ„ط¨ ط¨ط§ظ†طھط¸ط§ط± ظ…ظ†ط¯ظˆط¨ â€” ط§ط¶ط؛ط· ظ„ظ‚ط¨ظˆظ„ظ‡',
+          title: 'طلب توصيل جديد',
+          body: 'يوجد طلب بانتظار مندوب — اضغط لقبوله',
           type: 'delivery_request',
           data: { order_id: order.id }
         }))
         await supabase.from('notifications').insert(driverNotifications)
       }
 
-      // ط¨ط¹ط¯ ط¯ظ‚ظٹظ‚ط© â€” ط¥ط°ط§ ظ…ط§ ظپظٹ ظ…ظ†ط¯ظˆط¨ ظ‚ط¨ظ„
+      // بعد دقيقة — إذا ما في مندوب قبل
       setTimeout(async () => {
         const { data: currentOrder } = await supabase
           .from('orders')
@@ -247,8 +286,8 @@ router.patch('/:id/status', async (req, res) => {
         if (currentOrder && !currentOrder.driver_id && currentOrder.status === 'ready') {
           await supabase.from('notifications').insert({
             user_id: currentOrder.customer_id,
-            title: 'ظ„ط§ ظٹظˆط¬ط¯ ظ…ظ†ط¯ظˆط¨ ظ…طھط§ط­',
-            body: 'ظ„ط§ ظٹظˆط¬ط¯ ظ…ظ†ط¯ظˆط¨ ظ…طھط§ط­ ط­ط§ظ„ظٹط§ظ‹طŒ ظ‡ظ„ طھط±ظٹط¯ ط§ظ„ط§ظ†طھط¸ط§ط± ط£ظˆ ط§ظ„ط§ط³طھظ„ط§ظ… ط§ظ„ط´ط®طµظٹطں',
+            title: 'لا يوجد مندوب متاح',
+            body: 'لا يوجد مندوب متاح حالياً، هل تريد الانتظار أو الاستلام الشخصي؟',
             type: 'no_driver_available',
             data: { order_id: order.id, options: ['wait', 'pickup'] }
           })
@@ -256,14 +295,14 @@ router.patch('/:id/status', async (req, res) => {
       }, 60 * 1000)
     }
 
-    // â”پâ”پâ”پ ط¥ط´ط¹ط§ط± ط§ظ„ط¹ظ…ظٹظ„ â”پâ”پâ”پ
+    // ━━━ إشعار العميل ━━━
     const statusMessages = {
-      accepted:   { title: 'طھظ… ظ‚ط¨ظˆظ„ ط·ظ„ط¨ظƒ',    body: 'ط§ظ„ط´ظٹظپط© ظ‚ط¨ظ„طھ ط·ظ„ط¨ظƒ ظˆط¨ط¯ط£طھ ط§ظ„طھط­ط¶ظٹط±', type: 'order_accepted'   },
-      preparing:  { title: 'ط·ظ„ط¨ظƒ ظٹظڈط­ط¶ظژظ‘ط±',     body: 'ط§ظ„ط´ظٹظپط© طھط­ط¶ط± ظˆط¬ط¨طھظƒ ط§ظ„ط¢ظ†',         type: 'order_preparing'  },
-      ready:      { title: 'ط·ظ„ط¨ظƒ ط¬ط§ظ‡ط²',        body: 'ط·ظ„ط¨ظƒ ط¬ط§ظ‡ط² ظ„ظ„ط§ط³طھظ„ط§ظ… ط£ظˆ ط§ظ„طھظˆطµظٹظ„',  type: 'order_ready'      },
-      delivering: { title: 'ظپظٹ ط§ظ„ط·ط±ظٹظ‚',        body: 'ط§ظ„ظ…ظ†ط¯ظˆط¨ طھظˆط¬ظ‡ ط¨ط·ظ„ط¨ظƒ',              type: 'order_delivering' },
-      delivered:  { title: 'ظˆطµظ„ ط·ظ„ط¨ظƒ',         body: 'ط§ط³طھظ…طھط¹ ط¨ظˆط¬ط¨طھظƒ! ظ„ط§ طھظ†ط³ظ‰ ط§ظ„طھظ‚ظٹظٹظ…', type: 'order_delivered'  },
-      cancelled:  { title: 'طھظ… ط¥ظ„ط؛ط§ط، ط§ظ„ط·ظ„ط¨',  body: 'طھظ… ط¥ظ„ط؛ط§ط، ط·ظ„ط¨ظƒ',                  type: 'order_cancelled'  }
+      accepted:   { title: 'تم قبول طلبك',    body: 'الشيفة قبلت طلبك وبدأت التحضير', type: 'order_accepted'   },
+      preparing:  { title: 'طلبك يُحضَّر',     body: 'الشيفة تحضر وجبتك الآن',         type: 'order_preparing'  },
+      ready:      { title: 'طلبك جاهز',        body: 'طلبك جاهز للاستلام أو التوصيل',  type: 'order_ready'      },
+      delivering: { title: 'في الطريق',        body: 'المندوب توجه بطلبك',              type: 'order_delivering' },
+      delivered:  { title: 'وصل طلبك',         body: 'استمتع بوجبتك! لا تنسى التقييم', type: 'order_delivered'  },
+      cancelled:  { title: 'تم إلغاء الطلب',  body: 'تم إلغاء طلبك',                  type: 'order_cancelled'  }
     }
 
     if (statusMessages[status]) {
@@ -282,9 +321,9 @@ router.patch('/:id/status', async (req, res) => {
   }
 })
 
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders/:id/review
-// â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/:id/review', async (req, res) => {
   try {
     const order_id = req.params.id
@@ -292,11 +331,11 @@ router.post('/:id/review', async (req, res) => {
     const numericRating = Number(rating)
 
     if (!customer_id) {
-      return res.status(400).json({ success: false, message: 'ظ…ط¹ط±ظپ ط§ظ„ط¹ظ…ظٹظ„ ظ…ط·ظ„ظˆط¨' })
+      return res.status(400).json({ success: false, message: 'معرف العميل مطلوب' })
     }
 
     if (!numericRating || numericRating < 1 || numericRating > 5) {
-      return res.status(400).json({ success: false, message: 'ط§ظ„طھظ‚ظٹظٹظ… ظٹط¬ط¨ ط£ظ† ظٹظƒظˆظ† ط¨ظٹظ† 1 ظˆ 5' })
+      return res.status(400).json({ success: false, message: 'التقييم يجب أن يكون بين 1 و 5' })
     }
 
     const { data: order, error: orderErr } = await supabase
@@ -308,11 +347,11 @@ router.post('/:id/review', async (req, res) => {
     if (orderErr) throw orderErr
 
     if (order.status !== 'delivered') {
-      return res.status(400).json({ success: false, message: 'ظ„ط§ ظٹظ…ظƒظ† ط§ظ„طھظ‚ظٹظٹظ… ط¥ظ„ط§ ط¨ط¹ط¯ ط§ظ„طھط³ظ„ظٹظ…' })
+      return res.status(400).json({ success: false, message: 'لا يمكن التقييم إلا بعد التسليم' })
     }
 
     if (String(order.customer_id) !== String(customer_id)) {
-      return res.status(403).json({ success: false, message: 'ط؛ظٹط± ظ…طµط±ط­' })
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
     }
 
     const { data: existingReview } = await supabase
@@ -322,7 +361,7 @@ router.post('/:id/review', async (req, res) => {
       .maybeSingle()
 
     if (existingReview) {
-      return res.status(409).json({ success: false, message: 'طھظ… طھظ‚ظٹظٹظ… ظ‡ط°ط§ ط§ظ„ط·ظ„ط¨ ظ…ط³ط¨ظ‚ط§ظ‹' })
+      return res.status(409).json({ success: false, message: 'تم تقييم هذا الطلب مسبقاً' })
     }
 
     const { data: review, error: reviewErr } = await supabase
