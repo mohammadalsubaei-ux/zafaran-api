@@ -2,6 +2,8 @@
 const router   = express.Router()
 const supabase = require('../supabase')
 
+const VALID_STATUSES = ['available', 'preorder', 'unavailable']
+
 // ━━━ GET /menu/chef/:chef_id — كل وجبات الشيف ━━━
 router.get('/chef/:chef_id', async (req, res) => {
   try {
@@ -21,21 +23,26 @@ router.get('/chef/:chef_id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { chef_id, name, price, category, status, prep_hours, prep_minutes, description, is_available, image_url } = req.body
-console.log("BODY IMAGE:", image_url)
+
     if (!chef_id || !name || !price)
       return res.status(400).json({ success: false, message: 'chef_id والاسم والسعر مطلوبان' })
+
+    const finalStatus = status || 'available'
+    if (!VALID_STATUSES.includes(finalStatus)) {
+      return res.status(400).json({ success: false, message: `status غير صالحة. القيم المسموحة: ${VALID_STATUSES.join(', ')}` })
+    }
 
     const { data, error } = await supabase
       .from('menu_items')
       .insert({
         chef_id, name, price,
         category:    category || 'rice',
-        status:      status || 'available',
+        status:      finalStatus,
         prep_hours:  prep_hours || 0,
         description: description || '',
         image_url:    image_url || null,
         prep_minutes: prep_minutes || 0,
-        is_available: status === 'available',
+        is_available: finalStatus === 'available',
       })
       .select().single()
     if (error) throw error
@@ -49,7 +56,11 @@ console.log("BODY IMAGE:", image_url)
 router.patch('/:id', async (req, res) => {
   try {
     const { name, price, category, status, prep_hours, prep_minutes, description, is_available, image_url } = req.body
-    console.log("PATCH BODY:", JSON.stringify(req.body))
+
+    if (status && !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({ success: false, message: `status غير صالحة. القيم المسموحة: ${VALID_STATUSES.join(', ')}` })
+    }
+
     const updates = {}
     if (name)                          updates.name         = name
     if (price)                         updates.price        = price
@@ -87,4 +98,3 @@ router.delete('/:id', async (req, res) => {
 })
 
 module.exports = router
-
