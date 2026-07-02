@@ -42,11 +42,18 @@ router.post('/', async (req, res) => {
       delivery_lng,
       payment_method,
       notes,
-      order_type // 'instant' | 'preorder' — اختياري، افتراضياً instant
+      order_type,     // 'instant' | 'preorder' — اختياري، افتراضياً instant
+      proposed_time   // مطلوب إذا order_type = 'preorder'
     } = req.body
 
     if (!customer_id || !chef_id) {
       return res.status(400).json({ success: false, message: 'بيانات العميل أو الشيف ناقصة' })
+    }
+
+    const isPreorder = order_type === 'preorder'
+
+    if (isPreorder && !proposed_time) {
+      return res.status(400).json({ success: false, message: 'الطلب المسبق يحتاج تحديد proposed_time' })
     }
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -119,7 +126,9 @@ router.post('/', async (req, res) => {
         delivery_lat,
         delivery_lng,
         distance_km: distance_km != null ? parseFloat(distance_km.toFixed(2)) : null,
-        order_type: order_type === 'preorder' ? 'preorder' : 'instant',
+        order_type: isPreorder ? 'preorder' : 'instant',
+        proposed_time: isPreorder ? proposed_time : null,
+        time_negotiation_status: isPreorder ? 'pending' : null,
         subtotal,
         delivery_fee,
         platform_fee,
@@ -143,9 +152,11 @@ router.post('/', async (req, res) => {
     if (chefLocation) {
       await supabase.from('notifications').insert({
         user_id: chefLocation.user_id,
-        title: 'طلب جديد',
-        body: `وصلك طلب جديد بقيمة ${total} ريال`,
-        type: 'order_new',
+        title: isPreorder ? 'طلب مسبق جديد — بانتظار تأكيد الوقت' : 'طلب جديد',
+        body: isPreorder
+          ? `عميل يقترح موعد ${proposed_time} لطلب بقيمة ${total} ريال`
+          : `وصلك طلب جديد بقيمة ${total} ريال`,
+        type: isPreorder ? 'preorder_time_proposed' : 'order_new',
         data: { order_id: order.id }
       })
     }
@@ -311,6 +322,132 @@ router.patch('/:id/status', async (req, res) => {
         title: statusMessages[status].title,
         body: statusMessages[status].body,
         type: statusMessages[status].type,
+        data: { order_id: order.id }
+      })
+    }
+
+    res.json({ success: true, data: order })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /orders/:id/confirm-time — رد الشيف على الوقت المقترح
+//  body: { action: 'accept' | 'counter', counter_time? }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/confirm-time', async (req, res) => {
+  try {
+    const { action, counter_time } = req.body
+
+    if (!['accept', 'counter'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'action يجب أن تكون accept أو counter' })
+    }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('orders')
+      .select('id, order_type, proposed_time, time_negotiation_status, customer_id')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchErr) throw fetchErr
+
+    if (existing.order_type !== 'preorder') {
+      return res.status(400).json({ success: false, message: 'هذا الطلب ليس طلباً مسبقاً' })
+    }
+
+    if (existing.time_negotiation_status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'تم الرد على هذا الطلب مسبقاً' })
+    }
+
+    let updates = {}
+
+    if (action === 'accept') {
+      updates = {
+        time_negotiation_status: 'accepted',
+        confirmed_time: existing.proposed_time
+      }
+    } else {
+      if (!counter_time) {
+        return res.status(400).json({ success: false, message: 'counter_time مطلوب عند اقتراح وقت بديل' })
+      }
+      updates = {
+        time_negotiation_status: 'chef_countered',
+        confirmed_time: counter_time
+      }
+    }
+
+    const { data: order, error } = await supabase
+      .from('orders')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    await supabase.from('notifications').insert({
+      user_id: order.customer_id,
+      title: action === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
+      body: action === 'accept'
+        ? 'تم تأكيد موعد طلبك، يمكنك إتمام الدفع الآن'
+        : `الشيف اقترح موعد ${counter_time} بدل موعدك — وافق أو ألغِ الطلب`,
+      type: action === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
+      data: { order_id: order.id }
+    })
+
+    res.json({ success: true, data: order })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /orders/:id/respond-time — رد العميل على اقتراح الشيف البديل
+//  body: { action: 'accept' | 'reject' }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/respond-time', async (req, res) => {
+  try {
+    const { action } = req.body
+
+    if (!['accept', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'action يجب أن تكون accept أو reject' })
+    }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('orders')
+      .select('id, order_type, confirmed_time, time_negotiation_status, chef_id, chefs(user_id)')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchErr) throw fetchErr
+
+    if (existing.time_negotiation_status !== 'chef_countered') {
+      return res.status(400).json({ success: false, message: 'لا يوجد اقتراح بديل بانتظار ردك' })
+    }
+
+    const updates = action === 'accept'
+      ? { time_negotiation_status: 'accepted', proposed_time: existing.confirmed_time }
+      : { time_negotiation_status: 'rejected', status: 'cancelled' } // إلغاء بدون رسوم
+
+    const { data: order, error } = await supabase
+      .from('orders')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    const chefUserId = existing.chefs?.user_id
+    if (chefUserId) {
+      await supabase.from('notifications').insert({
+        user_id: chefUserId,
+        title: action === 'accept' ? 'العميل وافق على الوقت البديل' : 'العميل ألغى الطلب',
+        body: action === 'accept'
+          ? 'العميل وافق على الموعد المقترح، يمكنك البدء بعد إتمام الدفع'
+          : 'العميل رفض الوقت البديل وتم إلغاء الطلب بدون رسوم',
+        type: action === 'accept' ? 'preorder_time_finalized' : 'preorder_cancelled',
         data: { order_id: order.id }
       })
     }
