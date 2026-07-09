@@ -1,38 +1,88 @@
-require('dotenv').config()
 const express = require('express')
-const cors    = require('cors')
-const app     = express()
+const router = express.Router()
+const supabase = require('../supabase')
 
-// ── Middleware ──
-app.use(cors())
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  ⚠️ نقطة التبديل المستقبلية الوحيدة لـ Moyasar ⚠️
+//
+//  حالياً: محاكاة (Simulation) — تنجح فوراً بدون أي بوابة حقيقية.
+//  مستقبلاً (بعد جهوزية السجل التجاري + حساب Moyasar):
+//    استبدل محتوى دالة processPaymentWithGateway() فقط
+//    باستدعاء API الحقيقي لـ Moyasar، وباقي الملف ما يتغيّر.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function processPaymentWithGateway({ orderId, paymentMethod, amount }) {
+  // محاكاة تأخير معالجة حقيقي (تجربة مستخدم واقعية)
+  await new Promise(resolve => setTimeout(resolve, 1200))
 
-// ── Routes ──
-app.use('/api/users',     require('./routes/users'))
-app.use('/api/chefs',     require('./routes/chefs'))
-app.use('/api/orders',    require('./routes/orders'))
-app.use('/api/admin',     require('./routes/admin'))
-app.use('/api/wallet',    require('./routes/wallet'))
-app.use('/api/cities',    require('./routes/cities'))
-app.use('/api/menu',      require('./routes/menu'))
-app.use('/api/addresses', require('./routes/addresses'))
-app.use('/api/drivers',   require('./routes/drivers'))
-app.use('/api/payment',   require('./routes/payment'))
+  // TODO (لما يجهز Moyasar): استبدل هذا بنداء API فعلي، وأرجع النتيجة الحقيقية
+  return {
+    success: true,
+    transaction_id: `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+    gateway: 'simulated'
+  }
+}
 
-// ── Health Check ──
-app.get('/', (req, res) => {
-  res.json({ app: 'زعفران API', version: '1.0.0', status: '🟢 شغّال' })
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /payment/process — معالجة دفع طلب معين
+//  body: { order_id, payment_method }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/process', async (req, res) => {
+  try {
+    const { order_id, payment_method } = req.body
+
+    if (!order_id || !payment_method) {
+      return res.status(400).json({ success: false, message: 'order_id و payment_method مطلوبان' })
+    }
+
+    if (!['card', 'apple_pay', 'stc_pay'].includes(payment_method)) {
+      return res.status(400).json({ success: false, message: 'وسيلة دفع غير مدعومة' })
+    }
+
+    const { data: order, error: fetchErr } = await supabase
+      .from('orders')
+      .select('id, total, payment_status, customer_id')
+      .eq('id', order_id)
+      .single()
+
+    if (fetchErr) throw fetchErr
+
+    if (order.payment_status === 'paid') {
+      return res.status(409).json({ success: false, message: 'تم دفع هذا الطلب مسبقاً' })
+    }
+
+    const result = await processPaymentWithGateway({
+      orderId: order_id,
+      paymentMethod: payment_method,
+      amount: order.total
+    })
+
+    if (!result.success) {
+      return res.status(402).json({ success: false, message: 'فشلت عملية الدفع، حاول مرة أخرى' })
+    }
+
+    const { data: updatedOrder, error: updateErr } = await supabase
+      .from('orders')
+      .update({
+        payment_status: 'paid',
+        payment_method,
+        payment_transaction_id: result.transaction_id
+      })
+      .eq('id', order_id)
+      .select()
+      .single()
+
+    if (updateErr) throw updateErr
+
+    res.json({
+      success: true,
+      data: {
+        order: updatedOrder,
+        transaction_id: result.transaction_id
+      }
+    })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
 })
 
-// ── Error Handler ──
-app.use((err, req, res, next) => {
-  console.error(err.stack)
-  res.status(500).json({ success: false, message: 'خطأ في السيرفر' })
-})
-
-// ── Start ──
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`\n🍲 زعفران API شغّال على http://localhost:${PORT}\n`)
-})
+module.exports = router
