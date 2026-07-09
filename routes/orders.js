@@ -43,8 +43,12 @@ router.post('/', async (req, res) => {
       payment_method,
       notes,
       order_type,     // 'instant' | 'preorder' — اختياري، افتراضياً instant
-      proposed_time   // مطلوب إذا order_type = 'preorder'
+      proposed_time,  // مطلوب إذا order_type = 'preorder'
+      requested_time  // اسم بديل يرسله cart.tsx — نقبله لضمان التوافق
     } = req.body
+
+    // توحيد الاسمين: الفرونت إند يرسل requested_time، والباك إند التاريخي proposed_time
+    const finalProposedTime = proposed_time || requested_time
 
     if (!customer_id || !chef_id) {
       return res.status(400).json({ success: false, message: 'بيانات العميل أو الشيف ناقصة' })
@@ -52,8 +56,8 @@ router.post('/', async (req, res) => {
 
     const isPreorder = order_type === 'preorder'
 
-    if (isPreorder && !proposed_time) {
-      return res.status(400).json({ success: false, message: 'الطلب المسبق يحتاج تحديد proposed_time' })
+    if (isPreorder && !finalProposedTime) {
+      return res.status(400).json({ success: false, message: 'الطلب المسبق يحتاج تحديد وقت التسليم المطلوب' })
     }
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -127,7 +131,7 @@ router.post('/', async (req, res) => {
         delivery_lng,
         distance_km: distance_km != null ? parseFloat(distance_km.toFixed(2)) : null,
         order_type: isPreorder ? 'preorder' : 'instant',
-        proposed_time: isPreorder ? proposed_time : null,
+        proposed_time: isPreorder ? finalProposedTime : null,
         time_negotiation_status: isPreorder ? 'pending' : null,
         subtotal,
         delivery_fee,
@@ -154,7 +158,7 @@ router.post('/', async (req, res) => {
         user_id: chefLocation.user_id,
         title: isPreorder ? 'طلب مسبق جديد — بانتظار تأكيد الوقت' : 'طلب جديد',
         body: isPreorder
-          ? `عميل يقترح موعد ${proposed_time} لطلب بقيمة ${total} ريال`
+          ? `عميل يقترح موعد ${finalProposedTime} لطلب بقيمة ${total} ريال`
           : `وصلك طلب جديد بقيمة ${total} ريال`,
         type: isPreorder ? 'preorder_time_proposed' : 'order_new',
         data: { order_id: order.id }
@@ -338,10 +342,18 @@ router.patch('/:id/status', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/confirm-time', async (req, res) => {
   try {
-    const { action, counter_time } = req.body
+    const { action, counter_time, confirmed_time } = req.body
 
-    if (!['accept', 'counter'].includes(action)) {
-      return res.status(400).json({ success: false, message: 'action يجب أن تكون accept أو counter' })
+    // توحيد الأسماء: الفرونت إند يرسل confirm/propose + confirmed_time
+    // بينما التوثيق التاريخي يستخدم accept/counter + counter_time — نقبل الاثنين
+    const normalizedAction = action === 'confirm' ? 'accept'
+                            : action === 'propose' ? 'counter'
+                            : action
+
+    const finalCounterTime = counter_time || confirmed_time
+
+    if (!['accept', 'counter'].includes(normalizedAction)) {
+      return res.status(400).json({ success: false, message: 'action يجب أن تكون accept/confirm أو counter/propose' })
     }
 
     const { data: existing, error: fetchErr } = await supabase
@@ -362,18 +374,19 @@ router.patch('/:id/confirm-time', async (req, res) => {
 
     let updates = {}
 
-    if (action === 'accept') {
+    if (normalizedAction === 'accept') {
       updates = {
         time_negotiation_status: 'accepted',
-        confirmed_time: existing.proposed_time
+        // إذا الشيف حدد وقت بالضبط (حتى لو مطابق لطلب العميل) نستخدمه، وإلا نرجع لوقت العميل المقترح
+        confirmed_time: finalCounterTime || existing.proposed_time
       }
     } else {
-      if (!counter_time) {
-        return res.status(400).json({ success: false, message: 'counter_time مطلوب عند اقتراح وقت بديل' })
+      if (!finalCounterTime) {
+        return res.status(400).json({ success: false, message: 'الوقت البديل مطلوب عند اقتراح موعد آخر' })
       }
       updates = {
         time_negotiation_status: 'chef_countered',
-        confirmed_time: counter_time
+        confirmed_time: finalCounterTime
       }
     }
 
@@ -388,11 +401,11 @@ router.patch('/:id/confirm-time', async (req, res) => {
 
     await supabase.from('notifications').insert({
       user_id: order.customer_id,
-      title: action === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
-      body: action === 'accept'
+      title: normalizedAction === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
+      body: normalizedAction === 'accept'
         ? 'تم تأكيد موعد طلبك، يمكنك إتمام الدفع الآن'
-        : `الشيف اقترح موعد ${counter_time} بدل موعدك — وافق أو ألغِ الطلب`,
-      type: action === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
+        : `الشيف اقترح موعد ${finalCounterTime} بدل موعدك — وافق أو ألغِ الطلب`,
+      type: normalizedAction === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
       data: { order_id: order.id }
     })
 
