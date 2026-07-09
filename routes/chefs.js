@@ -129,4 +129,35 @@ router.patch('/:id/toggle', async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /chefs/:id/offers — تحديث أنواع التقديم (مطبخ/عزائم/بوفيه/حلويات/معجنات/مشروبات)
+//  body: أي من { offers_daily, offers_hospitality, offers_buffet, offers_sweets, offers_pastries, offers_drinks } (boolean)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/offers', async (req, res) => {
+  try {
+    const ALLOWED = ['offers_daily', 'offers_hospitality', 'offers_buffet', 'offers_sweets', 'offers_pastries', 'offers_drinks']
+    const updates = {}
+
+    for (const key of ALLOWED) {
+      if (typeof req.body[key] === 'boolean') updates[key] = req.body[key]
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, message: 'ما فيه أي حقل صالح للتحديث' })
+    }
+
+    const { data, error } = await supabase
+      .from('chefs')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router
