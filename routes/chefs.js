@@ -112,6 +112,17 @@ router.patch('/:id/toggle', async (req, res) => {
       .single()
 
     if (error) throw error
+
+    // عند التحويل لـ"حجز مسبق": كل الوجبات المتاحة تتحول تلقائياً لحجز مسبق أيضاً
+    // (الوجبات اللي أصلاً "حجز مسبق" أو "غير متاحة" ما تتأثر — ما فيه تراجع تلقائي عكسي)
+    if (status === 'preorder') {
+      await supabase
+        .from('menu_items')
+        .update({ status: 'preorder', is_available: false })
+        .eq('chef_id', req.params.id)
+        .eq('status', 'available')
+    }
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
