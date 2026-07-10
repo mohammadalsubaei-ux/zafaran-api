@@ -1,75 +1,95 @@
-const express = require('express')
-const router = express.Router()
-const supabase = require('../supabase')
+const API = "https://zafaran-backend-production.up.railway.app/api/admin";
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  GET /admin/stats — إحصائيات اللوحة
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/stats', async (req, res) => {
-  try {
-    const [orders, chefs, revenue] = await Promise.all([
-      supabase.from('orders').select('id', { count: 'exact' }),
-      supabase.from('chefs').select('id', { count: 'exact' }).eq('is_verified', true),
-      supabase.from('orders').select('total').eq('status', 'delivered')
-    ])
+function getToken() {
+  return localStorage.getItem("zafaran_admin_token");
+}
 
-    const totalRevenue = revenue.data?.reduce((sum, o) => sum + o.total, 0) || 0
-    const platformRevenue = revenue.data?.reduce((sum, o) => sum + (o.total * 0.17), 0) || 0
+function setToken(token) {
+  localStorage.setItem("zafaran_admin_token", token);
+}
 
-    res.json({
-      success: true,
-      data: {
-        total_orders:      orders.count || 0,
-        total_chefs:       chefs.count  || 0,
-        total_revenue:     totalRevenue.toFixed(2),
-        platform_revenue:  platformRevenue.toFixed(2)
-      }
-    })
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+function clearToken() {
+  localStorage.removeItem("zafaran_admin_token");
+}
+
+// نداء API موحّد: يضيف التوكن تلقائياً، ويحوّل لصفحة الدخول لو انتهت الجلسة
+async function authFetch(path, options = {}) {
+  const token = getToken();
+  const headers = Object.assign(
+    { "Content-Type": "application/json" },
+    options.headers || {},
+    token ? { Authorization: "Bearer " + token } : {}
+  );
+
+  const res = await fetch(API + path, Object.assign({}, options, { headers }));
+
+  if (res.status === 401) {
+    clearToken();
+    window.location.href = "index.html";
+    return null;
   }
-})
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  GET /admin/orders — كل الطلبات
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/orders', async (req, res) => {
-  try {
-    const { status, limit = 50 } = req.query
+  return res.json();
+}
 
-    let query = supabase
-      .from('orders')
-      .select(`*, users(full_name, phone), chefs(*, users(full_name))`)
-      .order('created_at', { ascending: false })
-      .limit(limit)
-
-    if (status) query = query.eq('status', status)
-
-    const { data, error } = await query
-    if (error) throw error
-    res.json({ success: true, data })
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+// يتأكد من صلاحية الجلسة، ولو فاشلة يرجّع لصفحة الدخول — يُستدعى بأول كل صفحة محمية
+async function requireAuth() {
+  const token = getToken();
+  if (!token) {
+    window.location.href = "index.html";
+    return false;
   }
-})
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  PATCH /admin/chefs/:id/verify — توثيق طباخة
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/chefs/:id/verify', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('chefs')
-      .update({ is_verified: true })
-      .eq('id', req.params.id)
-      .select()
-      .single()
-
-    if (error) throw error
-    res.json({ success: true, data })
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+  const json = await authFetch("/auth/me");
+  if (!json || !json.success) {
+    window.location.href = "index.html";
+    return false;
   }
-})
+  return true;
+}
 
-module.exports = router
+async function logout() {
+  await authFetch("/auth/logout", { method: "POST" });
+  clearToken();
+  window.location.href = "index.html";
+}
+
+// يبني الشريط الجانبي وتظليل الصفحة النشطة
+function renderSidebar(active) {
+  const items = [
+    { id: "dashboard", label: "لوحة المعلومات", href: "dashboard.html" },
+    { id: "orders",    label: "الطلبات",        href: "orders.html" },
+    { id: "chefs",     label: "الشيفات",        href: "chefs.html" },
+    { id: "drivers",   label: "المناديب",       href: "drivers.html" },
+  ];
+
+  const nav = document.getElementById("sidebar-nav");
+  if (!nav) return;
+
+  nav.innerHTML = items
+    .map(
+      (item) =>
+        `<div class="nav-item${item.id === active ? " active" : ""}" onclick="location.href='${item.href}'">${item.label}</div>`
+    )
+    .join("");
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("ar-SA", {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function money(value) {
+  const n = Number(value || 0);
+  return n.toFixed(2) + " ر.س";
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text == null ? "" : String(text);
+  return div.innerHTML;
+}
