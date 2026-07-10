@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة المعلومات — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="document.getElementById('pw-modal').classList.add('open')">تغيير كلمة السر</div>
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">لوحة المعلومات</div>
+      <div class="page-sub">نظرة عامة على أداء زعفران</div>
+
+      <div id="stats-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- مودال تغيير كلمة السر -->
+  <div class="modal-overlay" id="pw-modal">
+    <div class="modal-box">
+      <div class="modal-title">تغيير كلمة السر</div>
+      <div class="error-box" id="pw-error"></div>
+
+      <label>كلمة السر الحالية</label>
+      <input type="password" id="current-pw" />
+
+      <label>كلمة السر الجديدة (8 أحرف على الأقل)</label>
+      <input type="password" id="new-pw" />
+
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="document.getElementById('pw-modal').classList.remove('open')">إلغاء</button>
+        <button class="btn-primary" id="pw-submit" onclick="submitPasswordChange()">حفظ</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("dashboard");
+      loadStats();
+    })();
+
+    async function loadStats() {
+      const container = document.getElementById("stats-content");
+      const json = await authFetch("/stats");
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل الإحصائيات</div>';
+        return;
+      }
+
+      const d = json.data;
+      container.className = "";
+      container.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value">${d.total_orders}</div>
+            <div class="stat-label">إجمالي الطلبات</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${d.total_chefs}</div>
+            <div class="stat-label">شيفات موثّقات</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${d.total_drivers}</div>
+            <div class="stat-label">إجمالي المناديب</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${money(d.total_revenue)}</div>
+            <div class="stat-label">إجمالي المبيعات (المسلّمة)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${money(d.platform_revenue)}</div>
+            <div class="stat-label">عمولة زعفران (17%)</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function submitPasswordChange() {
+      const current_password = document.getElementById("current-pw").value;
+      const new_password = document.getElementById("new-pw").value;
+      const errorBox = document.getElementById("pw-error");
+      const btn = document.getElementById("pw-submit");
+
+      errorBox.style.display = "none";
+      btn.disabled = true;
+      btn.textContent = "جاري الحفظ...";
+
+      const json = await authFetch("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current_password, new_password }),
+      });
+
+      btn.disabled = false;
+      btn.textContent = "حفظ";
+
+      if (json && json.success) {
+        document.getElementById("pw-modal").classList.remove("open");
+        document.getElementById("current-pw").value = "";
+        document.getElementById("new-pw").value = "";
+        alert("تم تغيير كلمة السر بنجاح");
+      } else {
+        errorBox.textContent = (json && json.message) || "تعذر تغيير كلمة السر";
+        errorBox.style.display = "block";
+      }
+    }
+  </script>
+</body>
+</html>

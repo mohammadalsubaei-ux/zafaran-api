@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>زعفران — دخول الأدمن</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">زعفران</div>
+      <div class="login-sub">لوحة تحكم الإدارة</div>
+
+      <div class="error-box" id="error-box"></div>
+
+      <form id="login-form">
+        <label for="username">اسم المستخدم</label>
+        <input type="text" id="username" autocomplete="username" required />
+
+        <label for="password">كلمة السر</label>
+        <input type="password" id="password" autocomplete="current-password" required />
+
+        <button type="submit" class="btn-primary" id="submit-btn">تسجيل الدخول</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    // لو فيه جلسة صالحة أصلاً، روح مباشرة للوحة المعلومات
+    (async () => {
+      const token = getToken();
+      if (!token) return;
+      try {
+        const res = await fetch(API + "/auth/me", {
+          headers: { Authorization: "Bearer " + token },
+        });
+        const json = await res.json();
+        if (json.success) window.location.href = "dashboard.html";
+      } catch (e) {
+        // تجاهل — خله يبقى بصفحة الدخول
+      }
+    })();
+
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+      const errorBox = document.getElementById("error-box");
+      const btn = document.getElementById("submit-btn");
+
+      errorBox.style.display = "none";
+      btn.disabled = true;
+      btn.textContent = "جاري الدخول...";
+
+      try {
+        const res = await fetch(API + "/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const json = await res.json();
+
+        if (json.success) {
+          setToken(json.data.token);
+          window.location.href = "dashboard.html";
+        } else {
+          errorBox.textContent = json.message || "بيانات الدخول غير صحيحة";
+          errorBox.style.display = "block";
+        }
+      } catch (err) {
+        errorBox.textContent = "تعذر الاتصال بالخادم";
+        errorBox.style.display = "block";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "تسجيل الدخول";
+      }
+    });
+  </script>
+</body>
+</html>

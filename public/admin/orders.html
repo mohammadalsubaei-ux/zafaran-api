@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>الطلبات — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">الطلبات</div>
+      <div class="page-sub">كل طلبات زعفران</div>
+
+      <div class="toolbar">
+        <select id="status-filter" onchange="loadOrders()">
+          <option value="">كل الحالات</option>
+          <option value="pending">قيد الانتظار</option>
+          <option value="accepted">مقبول</option>
+          <option value="preparing">قيد التحضير</option>
+          <option value="ready">جاهز</option>
+          <option value="delivering">في الطريق</option>
+          <option value="delivered">تم التسليم</option>
+          <option value="cancelled">ملغي</option>
+        </select>
+      </div>
+
+      <div id="orders-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    const STATUS_LABELS = {
+      pending: ["قيد الانتظار", "badge-yellow"],
+      accepted: ["مقبول", "badge-green"],
+      preparing: ["قيد التحضير", "badge-yellow"],
+      ready: ["جاهز", "badge-green"],
+      delivering: ["في الطريق", "badge-green"],
+      delivered: ["تم التسليم", "badge-green"],
+      cancelled: ["ملغي", "badge-red"],
+    };
+
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("orders");
+      loadOrders();
+    })();
+
+    async function loadOrders() {
+      const container = document.getElementById("orders-content");
+      container.className = "loading-state";
+      container.innerHTML = "جاري التحميل...";
+
+      const status = document.getElementById("status-filter").value;
+      const query = status ? "?status=" + encodeURIComponent(status) : "";
+      const json = await authFetch("/orders" + query);
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل الطلبات</div>';
+        return;
+      }
+
+      if (!json.data || json.data.length === 0) {
+        container.innerHTML = '<div class="empty-state">ما فيه طلبات مطابقة</div>';
+        return;
+      }
+
+      const rows = json.data
+        .map((o) => {
+          const statusMeta = STATUS_LABELS[o.status] || [o.status, "badge-muted"];
+          return `
+            <tr>
+              <td>#${escapeHtml(String(o.id).slice(0, 8))}</td>
+              <td>${escapeHtml(o.users?.full_name || "—")}</td>
+              <td>${escapeHtml(o.chefs?.users?.full_name || "—")}</td>
+              <td>${money(o.total)}</td>
+              <td><span class="badge ${statusMeta[1]}">${statusMeta[0]}</span></td>
+              <td>${o.order_type === "preorder" ? "مسبق" : "فوري"}</td>
+              <td>${formatDate(o.created_at)}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      container.className = "";
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>الطلب</th>
+                <th>العميل</th>
+                <th>الشيف</th>
+                <th>الإجمالي</th>
+                <th>الحالة</th>
+                <th>النوع</th>
+                <th>التاريخ</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>

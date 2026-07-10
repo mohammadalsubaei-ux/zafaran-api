@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>المناديب — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">المناديب</div>
+      <div class="page-sub">كل مناديب التوصيل بزعفران</div>
+
+      <div id="drivers-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("drivers");
+      loadDrivers();
+    })();
+
+    async function loadDrivers() {
+      const container = document.getElementById("drivers-content");
+      const json = await authFetch("/drivers");
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل المناديب</div>';
+        return;
+      }
+
+      if (!json.data || json.data.length === 0) {
+        container.innerHTML = '<div class="empty-state">ما فيه مناديب مسجلين</div>';
+        return;
+      }
+
+      const rows = json.data
+        .map((dr) => {
+          const availBadge = dr.is_available
+            ? '<span class="badge badge-green">متاح</span>'
+            : '<span class="badge badge-muted">غير متاح</span>';
+
+          const verifyBadge = dr.is_verified
+            ? '<span class="badge badge-green">موثّق</span>'
+            : `<button class="btn-small" onclick="verifyDriver('${dr.id}')">توثيق</button>`;
+
+          return `
+            <tr>
+              <td>${escapeHtml(dr.users?.full_name || "—")}</td>
+              <td>${escapeHtml(dr.users?.phone || "—")}</td>
+              <td>${availBadge}</td>
+              <td>${dr.total_deliveries || 0}</td>
+              <td>${money(dr.total_earnings)}</td>
+              <td>${verifyBadge}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      container.className = "";
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>الاسم</th>
+                <th>الجوال</th>
+                <th>الحالة</th>
+                <th>التوصيلات</th>
+                <th>الأرباح</th>
+                <th>التوثيق</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function verifyDriver(id) {
+      if (!confirm("توثيق هذا المندوب؟")) return;
+      const json = await authFetch("/drivers/" + id + "/verify", { method: "PATCH" });
+      if (json && json.success) {
+        loadDrivers();
+      } else {
+        alert((json && json.message) || "تعذر التوثيق");
+      }
+    }
+  </script>
+</body>
+</html>
