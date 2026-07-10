@@ -1,95 +1,285 @@
-const API = "https://zafaran-backend-production.up.railway.app/api/admin";
+const express = require('express')
+const router = express.Router()
+const crypto = require('crypto')
+const supabase = require('../supabase')
 
-function getToken() {
-  return localStorage.getItem("zafaran_admin_token");
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000 // 24 ساعة
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex')
 }
 
-function setToken(token) {
-  localStorage.setItem("zafaran_admin_token", token);
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex')
 }
 
-function clearToken() {
-  localStorage.removeItem("zafaran_admin_token");
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex')
 }
 
-// نداء API موحّد: يضيف التوكن تلقائياً، ويحوّل لصفحة الدخول لو انتهت الجلسة
-async function authFetch(path, options = {}) {
-  const token = getToken();
-  const headers = Object.assign(
-    { "Content-Type": "application/json" },
-    options.headers || {},
-    token ? { Authorization: "Bearer " + token } : {}
-  );
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  Middleware — يحمي كل endpoints الأدمن (عدا تسجيل الدخول)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function requireAdmin(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
 
-  const res = await fetch(API + path, Object.assign({}, options, { headers }));
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'يلزم تسجيل الدخول' })
+    }
 
-  if (res.status === 401) {
-    clearToken();
-    window.location.href = "index.html";
-    return null;
+    const { data: session, error } = await supabase
+      .from('admin_sessions')
+      .select('admin_id, expires_at')
+      .eq('token', token)
+      .single()
+
+    if (error || !session) {
+      return res.status(401).json({ success: false, message: 'جلسة غير صالحة، سجّل دخول مرة أخرى' })
+    }
+
+    if (new Date(session.expires_at) < new Date()) {
+      await supabase.from('admin_sessions').delete().eq('token', token)
+      return res.status(401).json({ success: false, message: 'انتهت صلاحية الجلسة، سجّل دخول مرة أخرى' })
+    }
+
+    req.adminId = session.admin_id
+    next()
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
   }
-
-  return res.json();
 }
 
-// يتأكد من صلاحية الجلسة، ولو فاشلة يرجّع لصفحة الدخول — يُستدعى بأول كل صفحة محمية
-async function requireAuth() {
-  const token = getToken();
-  if (!token) {
-    window.location.href = "index.html";
-    return false;
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/auth/login
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'اسم المستخدم وكلمة السر مطلوبان' })
+    }
+
+    const { data: admin, error } = await supabase
+      .from('admins')
+      .select('id, username, password_hash, password_salt')
+      .eq('username', username)
+      .single()
+
+    if (error || !admin) {
+      return res.status(401).json({ success: false, message: 'بيانات الدخول غير صحيحة' })
+    }
+
+    const computedHash = hashPassword(password, admin.password_salt)
+    if (computedHash !== admin.password_hash) {
+      return res.status(401).json({ success: false, message: 'بيانات الدخول غير صحيحة' })
+    }
+
+    const token = generateToken()
+    const expiresAt = new Date(Date.now() + SESSION_DURATION_MS)
+
+    await supabase.from('admin_sessions').insert({
+      token, admin_id: admin.id, expires_at: expiresAt.toISOString()
+    })
+
+    res.json({ success: true, data: { token, username: admin.username } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
   }
-  const json = await authFetch("/auth/me");
-  if (!json || !json.success) {
-    window.location.href = "index.html";
-    return false;
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/auth/logout
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/auth/logout', requireAdmin, async (req, res) => {
+  try {
+    const token = (req.headers.authorization || '').slice(7)
+    await supabase.from('admin_sessions').delete().eq('token', token)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
   }
-  return true;
-}
+})
 
-async function logout() {
-  await authFetch("/auth/logout", { method: "POST" });
-  clearToken();
-  window.location.href = "index.html";
-}
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/auth/me — التحقق من صلاحية الجلسة الحالية
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/auth/me', requireAdmin, async (req, res) => {
+  try {
+    const { data: admin, error } = await supabase
+      .from('admins')
+      .select('id, username')
+      .eq('id', req.adminId)
+      .single()
+    if (error) throw error
+    res.json({ success: true, data: admin })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
 
-// يبني الشريط الجانبي وتظليل الصفحة النشطة
-function renderSidebar(active) {
-  const items = [
-    { id: "dashboard", label: "لوحة المعلومات", href: "dashboard.html" },
-    { id: "orders",    label: "الطلبات",        href: "orders.html" },
-    { id: "chefs",     label: "الشيفات",        href: "chefs.html" },
-    { id: "drivers",   label: "المناديب",       href: "drivers.html" },
-  ];
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/auth/change-password
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/auth/change-password', requireAdmin, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body
 
-  const nav = document.getElementById("sidebar-nav");
-  if (!nav) return;
+    if (!current_password || !new_password) {
+      return res.status(400).json({ success: false, message: 'كل الحقول مطلوبة' })
+    }
+    if (new_password.length < 8) {
+      return res.status(400).json({ success: false, message: 'كلمة السر الجديدة يجب أن تكون 8 أحرف على الأقل' })
+    }
 
-  nav.innerHTML = items
-    .map(
-      (item) =>
-        `<div class="nav-item${item.id === active ? " active" : ""}" onclick="location.href='${item.href}'">${item.label}</div>`
-    )
-    .join("");
-}
+    const { data: admin, error } = await supabase
+      .from('admins')
+      .select('password_hash, password_salt')
+      .eq('id', req.adminId)
+      .single()
 
-function formatDate(value) {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return "—";
-  return d.toLocaleString("ar-SA", {
-    year: "numeric", month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-}
+    if (error || !admin) throw error || new Error('لم يتم العثور على الحساب')
 
-function money(value) {
-  const n = Number(value || 0);
-  return n.toFixed(2) + " ر.س";
-}
+    const currentHash = hashPassword(current_password, admin.password_salt)
+    if (currentHash !== admin.password_hash) {
+      return res.status(401).json({ success: false, message: 'كلمة السر الحالية غير صحيحة' })
+    }
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text == null ? "" : String(text);
-  return div.innerHTML;
-}
+    const newSalt = generateSalt()
+    const newHash = hashPassword(new_password, newSalt)
+
+    await supabase.from('admins').update({
+      password_hash: newHash, password_salt: newSalt
+    }).eq('id', req.adminId)
+
+    res.json({ success: true, message: 'تم تغيير كلمة السر بنجاح' })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/stats — إحصائيات اللوحة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/stats', requireAdmin, async (req, res) => {
+  try {
+    const [orders, chefs, drivers, revenue] = await Promise.all([
+      supabase.from('orders').select('id', { count: 'exact' }),
+      supabase.from('chefs').select('id', { count: 'exact' }).eq('is_verified', true),
+      supabase.from('drivers').select('id', { count: 'exact' }),
+      supabase.from('orders').select('total').eq('status', 'delivered')
+    ])
+
+    const totalRevenue = revenue.data?.reduce((sum, o) => sum + Number(o.total || 0), 0) || 0
+    const platformRevenue = totalRevenue * 0.17
+
+    res.json({
+      success: true,
+      data: {
+        total_orders:      orders.count  || 0,
+        total_chefs:       chefs.count   || 0,
+        total_drivers:     drivers.count || 0,
+        total_revenue:     totalRevenue.toFixed(2),
+        platform_revenue:  platformRevenue.toFixed(2)
+      }
+    })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/orders — كل الطلبات
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/orders', requireAdmin, async (req, res) => {
+  try {
+    const { status, limit = 100 } = req.query
+
+    let query = supabase
+      .from('orders')
+      .select(`*, users(full_name, phone), chefs(*, users(full_name))`)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (status) query = query.eq('status', status)
+
+    const { data, error } = await query
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/chefs — كل الشيفات
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/chefs', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('chefs')
+      .select('*, users(full_name, phone)')
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/chefs/:id/verify — توثيق شيف
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/chefs/:id/verify', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('chefs')
+      .update({ is_verified: true })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/drivers — كل المناديب
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/drivers', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('drivers')
+      .select('*, users(full_name, phone)')
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/drivers/:id/verify — توثيق مندوب
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/drivers/:id/verify', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('drivers')
+      .update({ is_verified: true })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+module.exports = router
