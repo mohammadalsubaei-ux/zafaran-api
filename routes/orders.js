@@ -3,6 +3,31 @@ const router = express.Router()
 const supabase = require('../supabase')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  إشعار موحّد: يحفظ بالجدول (للعرض داخل التطبيق) + يرسل push فعلي عبر Expo
+//  كان الإشعار يُحفظ بس بدون إرسال فعلي — هذا يصلح الفجوة بمكان واحد لكل الاستخدامات
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function notifyUser(user_id, title, body, type, data = {}) {
+  try {
+    await supabase.from('notifications').insert({ user_id, title, body, type, data })
+
+    const { data: tokens } = await supabase
+      .from('push_tokens').select('token').eq('user_id', user_id)
+
+    if (tokens && tokens.length > 0) {
+      const messages = tokens.map(t => ({ to: t.token, sound: 'default', title, body, data }))
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(messages),
+      })
+    }
+  } catch (err) {
+    // ما نكسر تدفق الطلب لو فشل إرسال الإشعار — بس نسجل الخطأ
+    console.error('notifyUser failed:', err.message)
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  حساب المسافة بين نقطتين (كم) — Haversine
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function calcDistanceKm(lat1, lng1, lat2, lng2) {
@@ -154,15 +179,15 @@ router.post('/', async (req, res) => {
     if (itemsErr) throw itemsErr
 
     if (chefLocation) {
-      await supabase.from('notifications').insert({
-        user_id: chefLocation.user_id,
-        title: isPreorder ? 'طلب مسبق جديد — بانتظار تأكيد الوقت' : 'طلب جديد',
-        body: isPreorder
+      await notifyUser(
+        chefLocation.user_id,
+        isPreorder ? 'طلب مسبق جديد — بانتظار تأكيد الوقت' : 'طلب جديد',
+        isPreorder
           ? `عميل يقترح موعد ${finalProposedTime} لطلب بقيمة ${total} ريال`
           : `وصلك طلب جديد بقيمة ${total} ريال`,
-        type: isPreorder ? 'preorder_time_proposed' : 'order_new',
-        data: { order_id: order.id }
-      })
+        isPreorder ? 'preorder_time_proposed' : 'order_new',
+        { order_id: order.id }
+      )
     }
 
     res.status(201).json({ success: true, data: { ...order, items: orderItems } })
@@ -280,14 +305,17 @@ router.patch('/:id/status', async (req, res) => {
         .eq('is_available', true)
 
       if (availableDrivers && availableDrivers.length > 0) {
-        const driverNotifications = availableDrivers.map(driver => ({
-          user_id: driver.user_id,
-          title: 'طلب توصيل جديد',
-          body: 'يوجد طلب بانتظار مندوب — اضغط لقبوله',
-          type: 'delivery_request',
-          data: { order_id: order.id }
-        }))
-        await supabase.from('notifications').insert(driverNotifications)
+        await Promise.all(
+          availableDrivers.map(driver =>
+            notifyUser(
+              driver.user_id,
+              'طلب توصيل جديد',
+              'يوجد طلب بانتظار مندوب — اضغط لقبوله',
+              'delivery_request',
+              { order_id: order.id }
+            )
+          )
+        )
       }
 
       // بعد دقيقة — إذا ما في مندوب قبل
@@ -299,13 +327,13 @@ router.patch('/:id/status', async (req, res) => {
           .single()
 
         if (currentOrder && !currentOrder.driver_id && currentOrder.status === 'ready') {
-          await supabase.from('notifications').insert({
-            user_id: currentOrder.customer_id,
-            title: 'لا يوجد مندوب متاح',
-            body: 'لا يوجد مندوب متاح حالياً، هل تريد الانتظار أو الاستلام الشخصي؟',
-            type: 'no_driver_available',
-            data: { order_id: order.id, options: ['wait', 'pickup'] }
-          })
+          await notifyUser(
+            currentOrder.customer_id,
+            'لا يوجد مندوب متاح',
+            'لا يوجد مندوب متاح حالياً، هل تريد الانتظار أو الاستلام الشخصي؟',
+            'no_driver_available',
+            { order_id: order.id, options: ['wait', 'pickup'] }
+          )
         }
       }, 60 * 1000)
     }
@@ -321,13 +349,13 @@ router.patch('/:id/status', async (req, res) => {
     }
 
     if (statusMessages[status]) {
-      await supabase.from('notifications').insert({
-        user_id: order.customer_id,
-        title: statusMessages[status].title,
-        body: statusMessages[status].body,
-        type: statusMessages[status].type,
-        data: { order_id: order.id }
-      })
+      await notifyUser(
+        order.customer_id,
+        statusMessages[status].title,
+        statusMessages[status].body,
+        statusMessages[status].type,
+        { order_id: order.id }
+      )
     }
 
     res.json({ success: true, data: order })
@@ -399,15 +427,15 @@ router.patch('/:id/confirm-time', async (req, res) => {
 
     if (error) throw error
 
-    await supabase.from('notifications').insert({
-      user_id: order.customer_id,
-      title: normalizedAction === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
-      body: normalizedAction === 'accept'
+    await notifyUser(
+      order.customer_id,
+      normalizedAction === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
+      normalizedAction === 'accept'
         ? 'تم تأكيد موعد طلبك، يمكنك إتمام الدفع الآن'
         : `الشيف اقترح موعد ${finalCounterTime} بدل موعدك — وافق أو ألغِ الطلب`,
-      type: normalizedAction === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
-      data: { order_id: order.id }
-    })
+      normalizedAction === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
+      { order_id: order.id }
+    )
 
     res.json({ success: true, data: order })
   } catch (err) {
@@ -454,15 +482,15 @@ router.patch('/:id/respond-time', async (req, res) => {
 
     const chefUserId = existing.chefs?.user_id
     if (chefUserId) {
-      await supabase.from('notifications').insert({
-        user_id: chefUserId,
-        title: action === 'accept' ? 'العميل وافق على الوقت البديل' : 'العميل ألغى الطلب',
-        body: action === 'accept'
+      await notifyUser(
+        chefUserId,
+        action === 'accept' ? 'العميل وافق على الوقت البديل' : 'العميل ألغى الطلب',
+        action === 'accept'
           ? 'العميل وافق على الموعد المقترح، يمكنك البدء بعد إتمام الدفع'
           : 'العميل رفض الوقت البديل وتم إلغاء الطلب بدون رسوم',
-        type: action === 'accept' ? 'preorder_time_finalized' : 'preorder_cancelled',
-        data: { order_id: order.id }
-      })
+        action === 'accept' ? 'preorder_time_finalized' : 'preorder_cancelled',
+        { order_id: order.id }
+      )
     }
 
     res.json({ success: true, data: order })

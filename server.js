@@ -21,6 +21,7 @@ app.use('/api/menu',      require('./routes/menu'))
 app.use('/api/addresses', require('./routes/addresses'))
 app.use('/api/drivers',   require('./routes/drivers'))
 app.use('/api/payment',   require('./routes/payment'))
+app.use('/api/tracking',  require('./routes/tracking'))
 
 // ── Health Check ──
 app.get('/', (req, res) => {
