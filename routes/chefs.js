@@ -20,7 +20,7 @@ router.get('/search', async (req, res) => {
 
     const chefsMap = new Map()
     data.forEach(item => {
-      if (item.chefs && item.chefs.status !== 'closed' && !chefsMap.has(item.chefs.id)) {
+      if (item.chefs && item.chefs.status !== 'closed' && item.chefs.is_verified && !chefsMap.has(item.chefs.id)) {
         chefsMap.set(item.chefs.id, item.chefs)
       }
     })

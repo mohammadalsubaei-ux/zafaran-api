@@ -3,6 +3,29 @@ const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  إشعار موحّد: يحفظ بالجدول + يرسل push فعلي عبر Expo (نفس نمط orders.js)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function notifyUser(user_id, title, body, type, data = {}) {
+  try {
+    await supabase.from('notifications').insert({ user_id, title, body, type, data })
+
+    const { data: tokens } = await supabase
+      .from('push_tokens').select('token').eq('user_id', user_id)
+
+    if (tokens && tokens.length > 0) {
+      const messages = tokens.map(t => ({ to: t.token, sound: 'default', title, body, data }))
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(messages),
+      })
+    }
+  } catch (err) {
+    console.error('notifyUser failed:', err.message)
+  }
+}
+
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000 // 24 ساعة
 
 function hashPassword(password, salt) {
@@ -241,6 +264,17 @@ router.patch('/chefs/:id/verify', requireAdmin, async (req, res) => {
       .single()
 
     if (error) throw error
+
+    if (data?.user_id) {
+      await notifyUser(
+        data.user_id,
+        'تم توثيق حسابك 🎉',
+        'مبروك! تم توثيق حسابك بزعفران، وطلباتك ووجباتك أصبحت ظاهرة للعملاء الآن.',
+        'chef_verified',
+        { chef_id: data.id }
+      )
+    }
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
@@ -276,6 +310,17 @@ router.patch('/drivers/:id/verify', requireAdmin, async (req, res) => {
       .single()
 
     if (error) throw error
+
+    if (data?.user_id) {
+      await notifyUser(
+        data.user_id,
+        'تم توثيق حسابك 🎉',
+        'مبروك! تم توثيق حسابك كمندوب بزعفران، تقدر الحين تستقبل طلبات توصيل.',
+        'driver_verified',
+        { driver_id: data.id }
+      )
+    }
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
