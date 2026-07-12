@@ -160,4 +160,30 @@ router.patch('/:id/offers', async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /chefs/:id/location — تحديث موقع الشيف (خط الطول/العرض)
+//  body: { lat, lng }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/location', async (req, res) => {
+  try {
+    const { lat, lng } = req.body
+
+    if (lat == null || lng == null) {
+      return res.status(400).json({ success: false, message: 'الإحداثيات مطلوبة (lat, lng)' })
+    }
+
+    const { data, error } = await supabase
+      .from('chefs')
+      .update({ lat, lng })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router
