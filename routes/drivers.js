@@ -122,18 +122,9 @@ router.post('/:id/delivered/:order_id', async (req, res) => {
       .select()
       .single()
     if (updateErr) throw updateErr
-    const { data: driver } = await supabase
-      .from('drivers')
-      .select('total_deliveries, total_earnings')
-      .eq('id', driver_id)
-      .single()
-    if (driver) {
-      await supabase.from('drivers').update({
-        is_available: true,
-        total_deliveries: (driver.total_deliveries || 0) + 1,
-        total_earnings: parseFloat(((driver.total_earnings || 0) + (order.driver_share || 0)).toFixed(2))
-      }).eq('id', driver_id)
-    }
+    // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
+    // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —
+    // لا نلمسها هنا إطلاقاً لتجنب العدّ المزدوج
     await supabase.from('notifications').insert({
       user_id: order.customer_id,
       title: 'وصل طلبك',

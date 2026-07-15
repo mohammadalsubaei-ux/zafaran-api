@@ -191,11 +191,13 @@ router.get('/stats', requireAdmin, async (req, res) => {
       supabase.from('orders').select('id', { count: 'exact' }),
       supabase.from('chefs').select('id', { count: 'exact' }).eq('is_verified', true),
       supabase.from('drivers').select('id', { count: 'exact' }),
-      supabase.from('orders').select('total').eq('status', 'delivered')
+      supabase.from('orders').select('total, platform_fee').eq('status', 'delivered')
     ])
 
     const totalRevenue = revenue.data?.reduce((sum, o) => sum + Number(o.total || 0), 0) || 0
-    const platformRevenue = totalRevenue * 0.17
+    // عمولة زعفران الحقيقية: مجموع platform_fee المخزون بدقة في كل طلب
+    // (17% من الطلب + 10% من التوصيل مقربة للأعلى) — وليس 17% من الإجمالي الشامل للتوصيل
+    const platformRevenue = revenue.data?.reduce((sum, o) => sum + Number(o.platform_fee || 0), 0) || 0
 
     res.json({
       success: true,
@@ -268,7 +270,7 @@ router.patch('/chefs/:id/verify', requireAdmin, async (req, res) => {
     if (data?.user_id) {
       await notifyUser(
         data.user_id,
-        'تم توثيق حسابك 🎉',
+        'تم توثيق حسابك',
         'مبروك! تم توثيق حسابك بزعفران، وطلباتك ووجباتك أصبحت ظاهرة للعملاء الآن.',
         'chef_verified',
         { chef_id: data.id }
@@ -314,7 +316,7 @@ router.patch('/drivers/:id/verify', requireAdmin, async (req, res) => {
     if (data?.user_id) {
       await notifyUser(
         data.user_id,
-        'تم توثيق حسابك 🎉',
+        'تم توثيق حسابك',
         'مبروك! تم توثيق حسابك كمندوب بزعفران، تقدر الحين تستقبل طلبات توصيل.',
         'driver_verified',
         { driver_id: data.id }
