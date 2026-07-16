@@ -1,6 +1,7 @@
 ﻿const express = require('express')
 const router = express.Router()
 const supabase = require('../supabase')
+const notifyUser = require('../notify')
 
 router.get('/:id', async (req, res) => {
   try {
@@ -63,6 +64,21 @@ router.get('/:id/orders', async (req, res) => {
 router.post('/:id/accept/:order_id', async (req, res) => {
   try {
     const { id: driver_id, order_id } = req.params
+
+    // حارس: تأكد أن المندوب موجود وموثّق قبل ربط أي طلب به
+    // (يمنع أخطاء foreign key الغامضة ويرجع رسالة واضحة بدلها)
+    const { data: driver, error: driverErr } = await supabase
+      .from('drivers')
+      .select('id, is_verified')
+      .eq('id', driver_id)
+      .single()
+    if (driverErr || !driver) {
+      return res.status(404).json({ success: false, message: 'ملف المندوب غير موجود — سجل خروجا ثم ادخل من جديد' })
+    }
+    if (!driver.is_verified) {
+      return res.status(403).json({ success: false, message: 'حسابك قيد المراجعة — بنرسل لك اشعارا فور التوثيق' })
+    }
+
     const { data: order, error: orderErr } = await supabase
       .from('orders')
       .select('id, status, driver_id, customer_id, total, driver_share')
@@ -87,13 +103,13 @@ router.post('/:id/accept/:order_id', async (req, res) => {
       return res.status(409).json({ success: false, message: 'تم استلام الطلب من مندوب اخر' })
     }
     await supabase.from('drivers').update({ is_available: false }).eq('id', driver_id)
-    await supabase.from('notifications').insert({
-      user_id: order.customer_id,
-      title: 'المندوب في الطريق',
-      body: 'تم تعيين مندوب لطلبك وهو في طريقه اليك',
-      type: 'order_delivering',
-      data: { order_id }
-    })
+    await notifyUser(
+      order.customer_id,
+      'المندوب في الطريق',
+      'تم تعيين مندوب لطلبك وهو في طريقه اليك',
+      'order_delivering',
+      { order_id }
+    )
     res.json({ success: true, data: updated })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
@@ -125,13 +141,13 @@ router.post('/:id/delivered/:order_id', async (req, res) => {
     // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
     // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —
     // لا نلمسها هنا إطلاقاً لتجنب العدّ المزدوج
-    await supabase.from('notifications').insert({
-      user_id: order.customer_id,
-      title: 'وصل طلبك',
-      body: 'استمتع بوجبتك! لا تنسى التقييم',
-      type: 'order_delivered',
-      data: { order_id }
-    })
+    await notifyUser(
+      order.customer_id,
+      'وصل طلبك',
+      'استمتع بوجبتك! لا تنسى التقييم',
+      'order_delivered',
+      { order_id }
+    )
     res.json({ success: true, data: updated })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })

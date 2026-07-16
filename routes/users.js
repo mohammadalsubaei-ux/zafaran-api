@@ -21,11 +21,34 @@ router.post('/register', async (req, res) => {
     if (error) throw error
 
     if (role === 'chef' && req.body.city) {
-      await supabase.from('chefs').insert({
+      const { error: chefErr } = await supabase.from('chefs').insert({
         user_id:      data.id,
         city:         req.body.city,
         neighborhood: req.body.neighborhood || ''
       })
+      if (chefErr) {
+        // لا نترك مستخدما يتيما بدون ملف شيف — نحذفه ونرجع الخطأ الحقيقي
+        await supabase.from('users').delete().eq('id', data.id)
+        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف الشيف: ' + chefErr.message })
+      }
+    }
+
+    // مندوب جديد: إنشاء سجله بجدول drivers فوراً
+    // (بدونه لوحة المندوب لا تجد ملفه وتفشل) — يبدأ غير موثّق
+    // وغير متاح حتى يوثّقه الأدمن ويفعّل حالته بنفسه
+    if (role === 'driver') {
+      const { error: driverErr } = await supabase.from('drivers').insert({
+        user_id:          data.id,
+        is_verified:      false,
+        is_available:     false,
+        total_deliveries: 0,
+        total_earnings:   0
+      })
+      if (driverErr) {
+        // لا نترك مستخدما يتيما بدون ملف مندوب — نحذفه ونرجع الخطأ الحقيقي
+        await supabase.from('users').delete().eq('id', data.id)
+        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف المندوب: ' + driverErr.message })
+      }
     }
 
     res.status(201).json({ success: true, data })

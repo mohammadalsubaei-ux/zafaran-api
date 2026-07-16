@@ -1,31 +1,7 @@
 ﻿const express = require('express')
 const router = express.Router()
 const supabase = require('../supabase')
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  إشعار موحّد: يحفظ بالجدول (للعرض داخل التطبيق) + يرسل push فعلي عبر Expo
-//  كان الإشعار يُحفظ بس بدون إرسال فعلي — هذا يصلح الفجوة بمكان واحد لكل الاستخدامات
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async function notifyUser(user_id, title, body, type, data = {}) {
-  try {
-    await supabase.from('notifications').insert({ user_id, title, body, type, data })
-
-    const { data: tokens } = await supabase
-      .from('push_tokens').select('token').eq('user_id', user_id)
-
-    if (tokens && tokens.length > 0) {
-      const messages = tokens.map(t => ({ to: t.token, sound: 'default', title, body, data }))
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(messages),
-      })
-    }
-  } catch (err) {
-    // ما نكسر تدفق الطلب لو فشل إرسال الإشعار — بس نسجل الخطأ
-    console.error('notifyUser failed:', err.message)
-  }
-}
+const notifyUser = require('../notify')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  حساب المسافة بين نقطتين (كم) — Haversine

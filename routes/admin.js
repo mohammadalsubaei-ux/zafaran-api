@@ -2,29 +2,7 @@ const express = require('express')
 const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  إشعار موحّد: يحفظ بالجدول + يرسل push فعلي عبر Expo (نفس نمط orders.js)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async function notifyUser(user_id, title, body, type, data = {}) {
-  try {
-    await supabase.from('notifications').insert({ user_id, title, body, type, data })
-
-    const { data: tokens } = await supabase
-      .from('push_tokens').select('token').eq('user_id', user_id)
-
-    if (tokens && tokens.length > 0) {
-      const messages = tokens.map(t => ({ to: t.token, sound: 'default', title, body, data }))
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(messages),
-      })
-    }
-  } catch (err) {
-    console.error('notifyUser failed:', err.message)
-  }
-}
+const notifyUser = require('../notify')
 
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000 // 24 ساعة
 
