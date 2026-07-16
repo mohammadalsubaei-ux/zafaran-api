@@ -3,6 +3,7 @@ const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
+const { STATUS_AR, TERMINAL_STATUSES, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000 // 24 ساعة
 
@@ -353,6 +354,66 @@ router.patch('/settings', requireAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'الاعداد غير موجود' })
     }
     res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/orders/:id — تفاصيل الطلب الكاملة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*, users(full_name, phone), chefs(id, city, user_id, users(full_name, phone)), drivers(id, user_id, users(full_name, phone)), order_items(*)')
+      .eq('id', req.params.id)
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    }
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/orders/:id/status — تغيير حالة/إلغاء بضوابط تسلسل الحالات
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
+  try {
+    const { status, cancel_reason } = req.body
+
+    const adminUsable = ['accepted', 'preparing', 'ready', 'delivering', 'delivered', 'cancelled']
+    if (!adminUsable.includes(status)) {
+      return res.status(400).json({ success: false, message: 'حالة غير صحيحة' })
+    }
+
+    const order = await getOrderCore(req.params.id)
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    }
+
+    if (TERMINAL_STATUSES.includes(order.status)) {
+      return res.status(409).json({ success: false, message: 'الطلب بحالة نهائية (' + STATUS_AR[order.status] + ') ولا يمكن تعديله' })
+    }
+
+    const allowed = ADMIN_TRANSITIONS[order.status] || []
+    if (!allowed.includes(status)) {
+      return res.status(409).json({ success: false, message: 'لا يمكن الانتقال من "' + STATUS_AR[order.status] + '" إلى "' + STATUS_AR[status] + '"' })
+    }
+
+    if (status === 'cancelled' && (!cancel_reason || !cancel_reason.trim())) {
+      return res.status(400).json({ success: false, message: 'سبب الإلغاء مطلوب — سيصل العميل في الإشعار' })
+    }
+
+    const updated = await applyStatusChange(order, status, {
+      cancel_reason: cancel_reason ? cancel_reason.trim() : undefined,
+      notifyChef: status === 'cancelled'
+    })
+    res.json({ success: true, data: updated })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }

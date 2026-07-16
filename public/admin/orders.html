@@ -19,7 +19,7 @@
 
     <div class="main">
       <div class="page-title">الطلبات</div>
-      <div class="page-sub">كل طلبات زعفران</div>
+      <div class="page-sub">اضغط أي طلب لعرض تفاصيله والتحكم بحالته</div>
 
       <div class="toolbar">
         <select id="status-filter" onchange="loadOrders()">
@@ -38,6 +38,13 @@
     </div>
   </div>
 
+  <!-- مودال تفاصيل الطلب -->
+  <div class="modal-overlay" id="order-modal">
+    <div class="modal-box" style="max-width:680px;width:94%;max-height:88vh;overflow-y:auto">
+      <div id="order-detail" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
   <script src="admin.js"></script>
   <script>
     const STATUS_LABELS = {
@@ -49,6 +56,19 @@
       delivered: ["تم التسليم", "badge-green"],
       cancelled: ["ملغي", "badge-red"],
     };
+
+    // مرآة ضوابط الخادم: الانتقالات المسموحة من كل حالة
+    const ADMIN_TRANSITIONS = {
+      pending:    ["accepted", "preparing", "ready", "cancelled"],
+      accepted:   ["preparing", "ready", "cancelled"],
+      preparing:  ["ready", "cancelled"],
+      ready:      ["delivering", "cancelled"],
+      delivering: ["delivered", "cancelled"],
+      delivered:  [],
+      cancelled:  [],
+    };
+
+    let currentOrderId = null;
 
     (async () => {
       const ok = await requireAuth();
@@ -81,7 +101,7 @@
         .map((o) => {
           const statusMeta = STATUS_LABELS[o.status] || [o.status, "badge-muted"];
           return `
-            <tr>
+            <tr onclick="openOrder('${o.id}')" style="cursor:pointer">
               <td>#${escapeHtml(String(o.id).slice(0, 8))}</td>
               <td>${escapeHtml(o.users?.full_name || "—")}</td>
               <td>${escapeHtml(o.chefs?.users?.full_name || "—")}</td>
@@ -113,6 +133,161 @@
           </table>
         </div>
       `;
+    }
+
+    function closeOrderModal() {
+      document.getElementById("order-modal").classList.remove("open");
+      currentOrderId = null;
+    }
+
+    async function openOrder(id) {
+      currentOrderId = id;
+      const modal = document.getElementById("order-modal");
+      const box = document.getElementById("order-detail");
+      modal.classList.add("open");
+      box.className = "loading-state";
+      box.innerHTML = "جاري التحميل...";
+
+      const json = await authFetch("/orders/" + id);
+      if (!json || !json.success) {
+        box.innerHTML = '<div class="empty-state">تعذر تحميل تفاصيل الطلب</div>';
+        return;
+      }
+
+      renderOrderDetail(json.data);
+    }
+
+    function sectionTitle(text) {
+      return `<div style="font-weight:800;font-size:13px;color:#C97D20;margin:16px 0 8px">${text}</div>`;
+    }
+
+    function infoRow(label, value) {
+      return `<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:13px">
+        <span style="opacity:.65">${label}</span><span style="font-weight:700;text-align:left">${value}</span>
+      </div>`;
+    }
+
+    function renderOrderDetail(d) {
+      const box = document.getElementById("order-detail");
+      const statusMeta = STATUS_LABELS[d.status] || [d.status, "badge-muted"];
+      const allowed = ADMIN_TRANSITIONS[d.status] || [];
+
+      const itemsRows = (d.order_items || [])
+        .map((it) => `
+          <tr>
+            <td>${escapeHtml(it.name)}</td>
+            <td style="text-align:center">×${it.quantity}</td>
+            <td>${money(it.subtotal)}</td>
+          </tr>
+        `).join("");
+
+      const actionsHtml = allowed.length === 0
+        ? `<div class="empty-state" style="padding:14px">الطلب بحالة نهائية — لا إجراءات متاحة</div>`
+        : `
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <select id="new-status" onchange="onStatusChoice()" style="padding:9px 12px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;font-size:14px">
+              <option value="">اختر الحالة الجديدة...</option>
+              ${allowed.map((st) => `<option value="${st}">${STATUS_LABELS[st][0]}</option>`).join("")}
+            </select>
+            <button class="btn-primary" id="apply-status" onclick="applyStatus()">تنفيذ</button>
+            <span id="action-status" style="font-size:12px;min-width:80px"></span>
+          </div>
+          <textarea id="cancel-reason" placeholder="سبب الإلغاء (سيصل العميل في الإشعار)..." style="display:none;width:100%;margin-top:10px;padding:10px;border-radius:10px;border:1px solid rgba(229,57,53,.4);background:transparent;color:inherit;font-family:inherit;font-size:13px;min-height:70px"></textarea>
+        `;
+
+      box.className = "";
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="modal-title" style="margin:0">طلب #${escapeHtml(String(d.id).slice(0, 8))}</div>
+          <span class="badge ${statusMeta[1]}">${statusMeta[0]}</span>
+        </div>
+        <div style="font-size:11px;opacity:.55;margin-top:4px">${formatDate(d.created_at)}</div>
+
+        ${sectionTitle("معلومات الطلب")}
+        ${infoRow("النوع", d.order_type === "preorder" ? "مسبق" + (d.proposed_time ? " — " + formatDate(d.proposed_time) : "") : "فوري")}
+        ${infoRow("التوصيل", escapeHtml(d.delivery_address || "—"))}
+        ${d.notes ? infoRow("ملاحظات العميل", escapeHtml(d.notes)) : ""}
+        ${d.cancel_reason ? infoRow("سبب الإلغاء", escapeHtml(d.cancel_reason)) : ""}
+
+        ${sectionTitle("الأطراف")}
+        ${infoRow("العميل", escapeHtml(d.users?.full_name || "—") + " — " + escapeHtml(d.users?.phone || ""))}
+        ${infoRow("الشيف", escapeHtml(d.chefs?.users?.full_name || "—") + (d.chefs?.city ? " — " + escapeHtml(d.chefs.city) : ""))}
+        ${infoRow("المندوب", d.drivers ? escapeHtml(d.drivers.users?.full_name || "—") + " — " + escapeHtml(d.drivers.users?.phone || "") : "لم يُعيَّن")}
+
+        ${sectionTitle("المنتجات")}
+        <div class="table-wrap"><table>
+          <thead><tr><th>المنتج</th><th style="text-align:center">الكمية</th><th>المجموع</th></tr></thead>
+          <tbody>${itemsRows}</tbody>
+        </table></div>
+
+        ${sectionTitle("المالية")}
+        ${infoRow("قيمة المنتجات", money(d.subtotal))}
+        ${infoRow("رسوم التوصيل", money(d.delivery_fee))}
+        ${infoRow("الإجمالي", "<b>" + money(d.total) + "</b>")}
+        ${infoRow("عمولة زعفران", money(d.platform_fee))}
+        ${infoRow("حصة الشيف", money(d.chef_share))}
+        ${infoRow("حصة المندوب", money(d.driver_share))}
+
+        ${sectionTitle("الإجراءات")}
+        ${actionsHtml}
+
+        <div class="modal-actions" style="margin-top:18px">
+          <button class="btn-ghost" onclick="closeOrderModal()">إغلاق</button>
+        </div>
+      `;
+    }
+
+    function onStatusChoice() {
+      const chosen = document.getElementById("new-status").value;
+      const reason = document.getElementById("cancel-reason");
+      reason.style.display = chosen === "cancelled" ? "block" : "none";
+    }
+
+    async function applyStatus() {
+      const chosen = document.getElementById("new-status").value;
+      const statusSpan = document.getElementById("action-status");
+      const btn = document.getElementById("apply-status");
+
+      if (!chosen) {
+        statusSpan.textContent = "اختر الحالة أولاً";
+        statusSpan.style.color = "#E53935";
+        return;
+      }
+
+      const cancel_reason = chosen === "cancelled"
+        ? document.getElementById("cancel-reason").value.trim()
+        : undefined;
+
+      if (chosen === "cancelled" && !cancel_reason) {
+        statusSpan.textContent = "سبب الإلغاء مطلوب";
+        statusSpan.style.color = "#E53935";
+        return;
+      }
+
+      const label = STATUS_LABELS[chosen][0];
+      if ((chosen === "delivered" || chosen === "cancelled") &&
+          !confirm('تأكيد: تغيير حالة الطلب إلى "' + label + '"؟')) {
+        return;
+      }
+
+      btn.disabled = true;
+      statusSpan.textContent = "جاري التنفيذ...";
+      statusSpan.style.color = "";
+
+      const json = await authFetch("/orders/" + currentOrderId + "/status", {
+        method: "PATCH",
+        body: JSON.stringify({ status: chosen, cancel_reason }),
+      });
+
+      btn.disabled = false;
+
+      if (json && json.success) {
+        await openOrder(currentOrderId); // إعادة عرض التفاصيل بالحالة الجديدة
+        loadOrders();
+      } else {
+        statusSpan.textContent = (json && json.message) || "تعذر التنفيذ";
+        statusSpan.style.color = "#E53935";
+      }
     }
   </script>
 </body>

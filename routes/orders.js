@@ -3,6 +3,7 @@ const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
 const getSettings = require('../settings')
+const { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  حساب المسافة بين نقطتين (كم) — Haversine
@@ -277,89 +278,43 @@ router.get('/:id', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/status', async (req, res) => {
   try {
-    const { status } = req.body
-    const validStatuses = ['accepted','preparing','ready','delivering','delivered','cancelled']
+    const { status, user_id, cancel_reason } = req.body
 
-    if (!validStatuses.includes(status)) {
+    const chefUsable = ['accepted', 'preparing', 'ready', 'cancelled']
+    if (!chefUsable.includes(status)) {
       return res.status(400).json({ success: false, message: 'حالة غير صحيحة' })
     }
+    if (!user_id) {
+      return res.status(401).json({ success: false, message: 'التحقق من الهوية مطلوب — حدّث التطبيق لآخر نسخة' })
+    }
 
-    const updates = { status }
-    if (status === 'accepted')  updates.accepted_at  = new Date()
-    if (status === 'ready')     updates.ready_at     = new Date()
-    if (status === 'delivered') updates.delivered_at = new Date()
+    const order = await getOrderCore(req.params.id)
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    }
 
-    const { data: order, error } = await supabase
-      .from('orders')
-      .update(updates)
-      .eq('id', req.params.id)
-      .select('*, customer_id, delivery_address, driver_id')
+    if (TERMINAL_STATUSES.includes(order.status)) {
+      return res.status(409).json({ success: false, message: 'الطلب بحالة نهائية (' + STATUS_AR[order.status] + ') ولا يمكن تعديله' })
+    }
+
+    // الملكية: فقط شيف الطلب يغيّر حالته من التطبيق
+    const { data: chef } = await supabase
+      .from('chefs')
+      .select('user_id')
+      .eq('id', order.chef_id)
       .single()
 
-    if (error) throw error
-
-    // ━━━ منطق تعيين المندوب عند ready ━━━
-    if (status === 'ready' && order.delivery_address !== 'استلام شخصي') {
-      const { data: availableDrivers } = await supabase
-        .from('drivers')
-        .select('id, user_id')
-        .eq('is_available', true)
-
-      if (availableDrivers && availableDrivers.length > 0) {
-        await Promise.all(
-          availableDrivers.map(driver =>
-            notifyUser(
-              driver.user_id,
-              'طلب توصيل جديد',
-              'يوجد طلب بانتظار مندوب — اضغط لقبوله',
-              'delivery_request',
-              { order_id: order.id }
-            )
-          )
-        )
-      }
-
-      // بعد دقيقة — إذا ما في مندوب قبل
-      setTimeout(async () => {
-        const { data: currentOrder } = await supabase
-          .from('orders')
-          .select('id, driver_id, status, customer_id')
-          .eq('id', order.id)
-          .single()
-
-        if (currentOrder && !currentOrder.driver_id && currentOrder.status === 'ready') {
-          await notifyUser(
-            currentOrder.customer_id,
-            'لا يوجد مندوب متاح',
-            'لا يوجد مندوب متاح حالياً، هل تريد الانتظار أو الاستلام الشخصي؟',
-            'no_driver_available',
-            { order_id: order.id, options: ['wait', 'pickup'] }
-          )
-        }
-      }, 60 * 1000)
+    if (!chef || chef.user_id !== user_id) {
+      return res.status(403).json({ success: false, message: 'غير مصرح — هذا الطلب ليس لمطبخك' })
     }
 
-    // ━━━ إشعار العميل ━━━
-    const statusMessages = {
-      accepted:   { title: 'تم قبول طلبك',    body: 'الشيفة قبلت طلبك وبدأت التحضير', type: 'order_accepted'   },
-      preparing:  { title: 'طلبك يُحضَّر',     body: 'الشيفة تحضر وجبتك الآن',         type: 'order_preparing'  },
-      ready:      { title: 'طلبك جاهز',        body: 'طلبك جاهز للاستلام أو التوصيل',  type: 'order_ready'      },
-      delivering: { title: 'في الطريق',        body: 'المندوب توجه بطلبك',              type: 'order_delivering' },
-      delivered:  { title: 'وصل طلبك',         body: 'استمتع بوجبتك! لا تنسى التقييم', type: 'order_delivered'  },
-      cancelled:  { title: 'تم إلغاء الطلب',  body: 'تم إلغاء طلبك',                  type: 'order_cancelled'  }
+    const allowed = CHEF_TRANSITIONS[order.status] || []
+    if (!allowed.includes(status)) {
+      return res.status(409).json({ success: false, message: 'لا يمكن الانتقال من "' + STATUS_AR[order.status] + '" إلى "' + STATUS_AR[status] + '"' })
     }
 
-    if (statusMessages[status]) {
-      await notifyUser(
-        order.customer_id,
-        statusMessages[status].title,
-        statusMessages[status].body,
-        statusMessages[status].type,
-        { order_id: order.id }
-      )
-    }
-
-    res.json({ success: true, data: order })
+    const updated = await applyStatusChange(order, status, { cancel_reason })
+    res.json({ success: true, data: updated })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }
