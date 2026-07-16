@@ -307,4 +307,55 @@ router.patch('/drivers/:id/verify', requireAdmin, async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/settings — كل إعدادات المنصة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/settings', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('*')
+      .order('key')
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/settings — تعديل قيمة إعداد
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/settings', requireAdmin, async (req, res) => {
+  try {
+    const { key, value } = req.body
+    if (!key) {
+      return res.status(400).json({ success: false, message: 'المفتاح مطلوب' })
+    }
+
+    const num = parseFloat(value)
+    if (!isFinite(num) || num < 0) {
+      return res.status(400).json({ success: false, message: 'القيمة يجب ان تكون رقما موجبا' })
+    }
+    if (key.endsWith('_rate') && num > 1) {
+      return res.status(400).json({ success: false, message: 'النسبة يجب ان تكون بين 0 و 1' })
+    }
+
+    const { data, error } = await supabase
+      .from('app_settings')
+      .update({ value: String(num), updated_at: new Date().toISOString() })
+      .eq('key', key)
+      .select()
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({ success: false, message: 'الاعداد غير موجود' })
+    }
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router

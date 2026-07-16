@@ -2,6 +2,7 @@
 const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
+const getSettings = require('../settings')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  حساب المسافة بين نقطتين (كم) — Haversine
@@ -23,11 +24,27 @@ function calcDistanceKm(lat1, lng1, lat2, lng2) {
 //  حساب رسوم التوصيل حسب المسافة
 //  أول 4.99 كم = 10 ريال ثابت، بعدها +1 ريال لكل كم إضافي
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function calcDeliveryFee(distanceKm) {
-  if (distanceKm == null) return 10.00 // احتياطي إذا ما توفرت الإحداثيات
-  if (distanceKm <= 4.99) return 10.00
-  return parseFloat((10 + Math.ceil(distanceKm - 4.99)).toFixed(2))
+function calcDeliveryFee(distanceKm, s) {
+  if (distanceKm == null) return s.delivery_base_fee // احتياطي إذا ما توفرت الإحداثيات
+  if (distanceKm <= s.delivery_base_km) return s.delivery_base_fee
+  return parseFloat((s.delivery_base_fee + Math.ceil(distanceKm - s.delivery_base_km) * s.delivery_per_km_fee).toFixed(2))
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /orders/delivery-settings — نِسب التوصيل للعرض بالتطبيق
+//  (عام بدون توكن — أرقام عرض فقط، تتحكم بها لوحة الأدمن)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/delivery-settings', async (req, res) => {
+  const s = await getSettings()
+  res.json({
+    success: true,
+    data: {
+      delivery_base_fee:   s.delivery_base_fee,
+      delivery_base_km:    s.delivery_base_km,
+      delivery_per_km_fee: s.delivery_per_km_fee
+    }
+  })
+})
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders — إنشاء طلب جديد
@@ -98,10 +115,13 @@ router.post('/', async (req, res) => {
 
     const isPickup = delivery_address === 'استلام شخصي'
 
-    // جلب إحداثيات الشيف لحساب المسافة
+    // إعدادات المنصة الحية (النِّسب والرسوم من لوحة الأدمن)
+    const s = await getSettings()
+
+    // جلب إحداثيات الشيف ونسبة عمولته المخصصة لحساب المسافة والحصص
     const { data: chefLocation } = await supabase
       .from('chefs')
-      .select('lat, lng, user_id')
+      .select('lat, lng, user_id, commission_rate')
       .eq('id', chef_id)
       .single()
 
@@ -112,13 +132,18 @@ router.post('/', async (req, res) => {
           delivery_lat, delivery_lng
         )
 
-    const delivery_fee = isPickup ? 0 : calcDeliveryFee(distance_km)
+    const delivery_fee = isPickup ? 0 : calcDeliveryFee(distance_km, s)
 
-    const platform_fee_order    = parseFloat((subtotal * 0.17).toFixed(2))
-    // عمولة التوصيل: 10% مقرّبة للأعلى لصالح زعفران، الباقي (بما فيه الكسور) للمندوب
-    const platform_fee_delivery = isPickup ? 0 : Math.ceil(delivery_fee * 0.10)
+    // عمولة المنصة: نسبة الشيف المخصصة إن وُجدت، وإلا النسبة العامة من الإعدادات
+    let commissionRate = parseFloat(chefLocation?.commission_rate)
+    if (!isFinite(commissionRate) || commissionRate < 0) commissionRate = s.platform_commission_rate
+    if (commissionRate > 1) commissionRate = commissionRate / 100 // تطبيع: 17 تعني 17%
+
+    const platform_fee_order    = parseFloat((subtotal * commissionRate).toFixed(2))
+    // عمولة التوصيل: نسبة من الإعدادات مقرّبة للأعلى لصالح زعفران، الباقي (بما فيه الكسور) للمندوب
+    const platform_fee_delivery = isPickup ? 0 : Math.ceil(delivery_fee * s.delivery_platform_rate)
     const platform_fee          = parseFloat((platform_fee_order + platform_fee_delivery).toFixed(2))
-    const chef_share            = parseFloat((subtotal * 0.83).toFixed(2))
+    const chef_share            = parseFloat((subtotal - platform_fee_order).toFixed(2))
     const driver_share          = isPickup ? 0 : parseFloat((delivery_fee - platform_fee_delivery).toFixed(2))
     const total                 = parseFloat((subtotal + delivery_fee).toFixed(2))
 

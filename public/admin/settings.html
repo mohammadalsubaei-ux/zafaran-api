@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>الإعدادات — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="document.getElementById('pw-modal').classList.add('open')">تغيير كلمة السر</div>
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">إعدادات المنصة</div>
+      <div class="page-sub">تحكّم بالنِّسب والرسوم — أي تعديل يسري على الطلبات الجديدة فوراً</div>
+
+      <div id="settings-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- مودال تغيير كلمة السر -->
+  <div class="modal-overlay" id="pw-modal">
+    <div class="modal-box">
+      <div class="modal-title">تغيير كلمة السر</div>
+      <div class="error-box" id="pw-error"></div>
+
+      <label>كلمة السر الحالية</label>
+      <input type="password" id="current-pw" />
+
+      <label>كلمة السر الجديدة (8 أحرف على الأقل)</label>
+      <input type="password" id="new-pw" />
+
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="document.getElementById('pw-modal').classList.remove('open')">إلغاء</button>
+        <button class="btn-primary" id="pw-submit" onclick="submitPasswordChange()">حفظ</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    // كيفية عرض كل إعداد: النِّسب تظهر كنسبة مئوية، والمبالغ بالريال
+    const FIELD_CONFIG = {
+      platform_commission_rate: { unit: "%",        toDisplay: (v) => round2(v * 100), toValue: (v) => v / 100, step: "0.5" },
+      delivery_platform_rate:   { unit: "%",        toDisplay: (v) => round2(v * 100), toValue: (v) => v / 100, step: "0.5" },
+      delivery_base_fee:        { unit: "ر.س",      toDisplay: (v) => v, toValue: (v) => v, step: "0.5" },
+      delivery_base_km:         { unit: "كم",       toDisplay: (v) => v, toValue: (v) => v, step: "0.01" },
+      delivery_per_km_fee:      { unit: "ر.س / كم", toDisplay: (v) => v, toValue: (v) => v, step: "0.5" },
+      min_withdrawal_amount:    { unit: "ر.س",      toDisplay: (v) => v, toValue: (v) => v, step: "10" },
+    };
+
+    function round2(n) { return Math.round(n * 100) / 100; }
+
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("settings");
+      loadSettings();
+    })();
+
+    async function loadSettings() {
+      const container = document.getElementById("settings-content");
+      const json = await authFetch("/settings");
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل الإعدادات — تأكد من تشغيل سكربت إنشاء الجدول</div>';
+        return;
+      }
+
+      container.className = "";
+      container.innerHTML = json.data.map((row) => {
+        const cfg = FIELD_CONFIG[row.key] || { unit: "", toDisplay: (v) => v, toValue: (v) => v, step: "any" };
+        const display = cfg.toDisplay(parseFloat(row.value));
+        return `
+          <div class="stat-card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px;text-align:right">
+            <div>
+              <div style="font-weight:800;font-size:15px">${escapeHtml(row.label)}</div>
+              <div class="page-sub" style="margin:4px 0 0;font-size:11px;opacity:.6">${escapeHtml(row.key)}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="number" id="in-${row.key}" value="${display}" step="${cfg.step}" min="0"
+                style="width:110px;padding:9px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;text-align:center;font-size:15px" />
+              <span style="min-width:56px;font-size:13px;opacity:.8">${cfg.unit}</span>
+              <button class="btn-primary" id="btn-${row.key}" onclick="saveSetting('${row.key}')">حفظ</button>
+              <span id="st-${row.key}" style="min-width:70px;font-size:12px"></span>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function saveSetting(key) {
+      const cfg = FIELD_CONFIG[key] || { toValue: (v) => v };
+      const input = document.getElementById("in-" + key);
+      const btn = document.getElementById("btn-" + key);
+      const status = document.getElementById("st-" + key);
+
+      const raw = parseFloat(input.value);
+      if (!isFinite(raw) || raw < 0) {
+        status.textContent = "قيمة غير صالحة";
+        status.style.color = "#E53935";
+        return;
+      }
+
+      btn.disabled = true;
+      status.textContent = "جاري الحفظ...";
+      status.style.color = "";
+
+      const json = await authFetch("/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ key, value: cfg.toValue(raw) }),
+      });
+
+      btn.disabled = false;
+
+      if (json && json.success) {
+        status.textContent = "تم الحفظ";
+        status.style.color = "#4CAF50";
+        setTimeout(() => { status.textContent = ""; }, 2500);
+      } else {
+        status.textContent = (json && json.message) || "تعذر الحفظ";
+        status.style.color = "#E53935";
+      }
+    }
+
+    async function submitPasswordChange() {
+      const current_password = document.getElementById("current-pw").value;
+      const new_password = document.getElementById("new-pw").value;
+      const errorBox = document.getElementById("pw-error");
+      const btn = document.getElementById("pw-submit");
+
+      errorBox.style.display = "none";
+      btn.disabled = true;
+      btn.textContent = "جاري الحفظ...";
+
+      const json = await authFetch("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current_password, new_password }),
+      });
+
+      btn.disabled = false;
+      btn.textContent = "حفظ";
+
+      if (json && json.success) {
+        document.getElementById("pw-modal").classList.remove("open");
+        document.getElementById("current-pw").value = "";
+        document.getElementById("new-pw").value = "";
+        alert("تم تغيير كلمة السر بنجاح");
+      } else {
+        errorBox.textContent = (json && json.message) || "تعذر تغيير كلمة السر";
+        errorBox.style.display = "block";
+      }
+    }
+  </script>
+</body>
+</html>
