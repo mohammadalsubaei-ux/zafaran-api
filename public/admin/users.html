@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>المستخدمون — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">المستخدمون</div>
+      <div class="page-sub">بحث وتعديل وإيقاف وحذف — التحكم الكامل بحسابات المنصة</div>
+
+      <div class="toolbar" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <input type="text" id="search-input" placeholder="بحث بالاسم أو الجوال..."
+          onkeydown="if(event.key==='Enter')loadUsers()"
+          style="padding:9px 12px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;font-size:14px;min-width:220px;font-family:inherit" />
+        <select id="role-filter" onchange="loadUsers()">
+          <option value="">كل الأدوار</option>
+          <option value="customer">عميل</option>
+          <option value="chef">شيف</option>
+          <option value="driver">مندوب</option>
+        </select>
+        <button class="btn-ghost" onclick="loadUsers()">بحث</button>
+        <button class="btn-primary" style="margin-inline-start:auto" onclick="openAddModal()">إضافة مستخدم</button>
+      </div>
+
+      <div id="users-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- مودال إدارة مستخدم -->
+  <div class="modal-overlay" id="user-modal">
+    <div class="modal-box" style="max-width:560px;width:94%;max-height:88vh;overflow-y:auto">
+      <div id="user-detail" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- مودال إضافة مستخدم -->
+  <div class="modal-overlay" id="add-modal">
+    <div class="modal-box" style="max-width:480px;width:94%">
+      <div class="modal-title">إضافة مستخدم</div>
+      <div class="error-box" id="add-error"></div>
+
+      <label>الاسم الكامل</label>
+      <input type="text" id="add-name" />
+
+      <label>رقم الجوال</label>
+      <input type="text" id="add-phone" placeholder="05XXXXXXXX" />
+
+      <label>الدور</label>
+      <select id="add-role" onchange="onAddRoleChange()" style="width:100%;padding:10px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;font-size:14px;margin-bottom:12px">
+        <option value="customer">عميل</option>
+        <option value="chef">شيف</option>
+        <option value="driver">مندوب</option>
+      </select>
+
+      <div id="add-city-wrap" style="display:none">
+        <label>المدينة</label>
+        <select id="add-city" style="width:100%;padding:10px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;font-size:14px;margin-bottom:12px">
+          <option value="">اختر المدينة...</option>
+        </select>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="closeAddModal()">إلغاء</button>
+        <button class="btn-primary" id="add-submit" onclick="submitAddUser()">إنشاء</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    const ROLE_AR = { customer: "عميل", chef: "شيف", driver: "مندوب" };
+    let currentUserId = null;
+    let citiesLoaded = false;
+
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("users");
+      loadUsers();
+    })();
+
+    async function loadUsers() {
+      const container = document.getElementById("users-content");
+      container.className = "loading-state";
+      container.innerHTML = "جاري التحميل...";
+
+      const search = encodeURIComponent(document.getElementById("search-input").value.trim());
+      const role = document.getElementById("role-filter").value;
+      const json = await authFetch(`/users?search=${search}&role=${role}`);
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل المستخدمين</div>';
+        return;
+      }
+      if (!json.data || json.data.length === 0) {
+        container.innerHTML = '<div class="empty-state">ما فيه نتائج مطابقة</div>';
+        return;
+      }
+
+      const rows = json.data.map((u) => {
+        const activeBadge = u.is_active === false
+          ? '<span class="badge badge-red">موقوف</span>'
+          : '<span class="badge badge-green">نشط</span>';
+        return `
+          <tr onclick="openUser('${u.id}')" style="cursor:pointer">
+            <td>${escapeHtml(u.full_name || "—")}</td>
+            <td>${escapeHtml(u.phone || "—")}</td>
+            <td>${ROLE_AR[u.role] || escapeHtml(u.role || "—")}</td>
+            <td>${activeBadge}</td>
+            <td>${formatDate(u.created_at)}</td>
+          </tr>
+        `;
+      }).join("");
+
+      container.className = "";
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>الاسم</th><th>الجوال</th><th>الدور</th><th>الحالة</th><th>التسجيل</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function closeUserModal() {
+      document.getElementById("user-modal").classList.remove("open");
+      currentUserId = null;
+    }
+
+    async function openUser(id) {
+      currentUserId = id;
+      const modal = document.getElementById("user-modal");
+      const box = document.getElementById("user-detail");
+      modal.classList.add("open");
+      box.className = "loading-state";
+      box.innerHTML = "جاري التحميل...";
+
+      const json = await authFetch("/users/" + id);
+      if (!json || !json.success) {
+        box.innerHTML = '<div class="empty-state">تعذر تحميل بيانات المستخدم</div>';
+        return;
+      }
+      renderUserDetail(json.data.user, json.data.profile);
+    }
+
+    function profileBlock(user, p) {
+      if (!p) return "";
+      if (user.role === "chef") {
+        return `
+          <div style="font-weight:800;font-size:13px;color:#C97D20;margin:16px 0 8px">ملف الشيف</div>
+          <div style="font-size:13px;line-height:2">
+            المدينة: <b>${escapeHtml(p.city || "—")}</b> — التوثيق: <b>${p.is_verified ? "موثق" : "غير موثق"}</b><br>
+            الطلبات: <b>${p.total_orders ?? 0}</b> — الأرباح: <b>${money(p.total_earnings)}</b> — التقييم: <b>${p.rating_avg ?? "—"}</b>
+            ${p.commission_rate != null ? "<br>عمولة مخصصة: <b>" + p.commission_rate + "</b>" : ""}
+          </div>`;
+      }
+      if (user.role === "driver") {
+        return `
+          <div style="font-weight:800;font-size:13px;color:#C97D20;margin:16px 0 8px">ملف المندوب</div>
+          <div style="font-size:13px;line-height:2">
+            التوثيق: <b>${p.is_verified ? "موثق" : "غير موثق"}</b> — متاح الآن: <b>${p.is_available ? "نعم" : "لا"}</b><br>
+            التوصيلات: <b>${p.total_deliveries ?? 0}</b> — الأرباح: <b>${money(p.total_earnings)}</b>
+          </div>`;
+      }
+      return "";
+    }
+
+    function renderUserDetail(user, profile) {
+      const box = document.getElementById("user-detail");
+      const suspended = user.is_active === false;
+
+      box.className = "";
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div class="modal-title" style="margin:0">${ROLE_AR[user.role] || user.role}</div>
+          ${suspended ? '<span class="badge badge-red">موقوف</span>' : '<span class="badge badge-green">نشط</span>'}
+        </div>
+
+        <label style="margin-top:14px">الاسم الكامل</label>
+        <input type="text" id="edit-name" value="${escapeHtml(user.full_name || "")}" />
+
+        <label>رقم الجوال</label>
+        <input type="text" id="edit-phone" value="${escapeHtml(user.phone || "")}" />
+
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+          <button class="btn-primary" id="save-user" onclick="saveUser()">حفظ التعديلات</button>
+          <span id="edit-status" style="font-size:12px;min-width:80px"></span>
+        </div>
+
+        ${profileBlock(user, profile)}
+
+        <div style="font-weight:800;font-size:13px;color:#E53935;margin:20px 0 8px">منطقة الخطر</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick="toggleActive(${suspended})">
+            ${suspended ? "تفعيل الحساب" : "إيقاف الحساب"}
+          </button>
+          <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick="deleteUser()">حذف نهائي</button>
+          <span id="danger-status" style="font-size:12px;align-self:center"></span>
+        </div>
+
+        <div class="modal-actions" style="margin-top:18px">
+          <button class="btn-ghost" onclick="closeUserModal()">إغلاق</button>
+        </div>
+      `;
+    }
+
+    async function saveUser() {
+      const status = document.getElementById("edit-status");
+      const btn = document.getElementById("save-user");
+      const full_name = document.getElementById("edit-name").value.trim();
+      const phone = document.getElementById("edit-phone").value.trim();
+
+      if (!full_name || !phone) {
+        status.textContent = "الاسم والجوال مطلوبان";
+        status.style.color = "#E53935";
+        return;
+      }
+
+      btn.disabled = true;
+      status.textContent = "جاري الحفظ...";
+      status.style.color = "";
+
+      const json = await authFetch("/users/" + currentUserId, {
+        method: "PATCH",
+        body: JSON.stringify({ full_name, phone }),
+      });
+
+      btn.disabled = false;
+      if (json && json.success) {
+        status.textContent = "تم الحفظ";
+        status.style.color = "#4CAF50";
+        loadUsers();
+      } else {
+        status.textContent = (json && json.message) || "تعذر الحفظ";
+        status.style.color = "#E53935";
+      }
+    }
+
+    async function toggleActive(activate) {
+      const label = activate ? "تفعيل هذا الحساب؟" : "إيقاف هذا الحساب؟ لن يستطيع الدخول أو الطلب حتى تعيد تفعيله";
+      if (!confirm(label)) return;
+
+      const status = document.getElementById("danger-status");
+      status.textContent = "جاري التنفيذ...";
+      status.style.color = "";
+
+      const json = await authFetch("/users/" + currentUserId + "/active", {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: activate }),
+      });
+
+      if (json && json.success) {
+        await openUser(currentUserId);
+        loadUsers();
+      } else {
+        status.textContent = (json && json.message) || "تعذر التنفيذ";
+        status.style.color = "#E53935";
+      }
+    }
+
+    async function deleteUser() {
+      if (!confirm("حذف نهائي للمستخدم وكل بياناته؟")) return;
+      if (!confirm("تأكيد أخير: المرتبط بطلبات سيُرفض حذفه تلقائياً — متابعة؟")) return;
+
+      const status = document.getElementById("danger-status");
+      status.textContent = "جاري الحذف...";
+      status.style.color = "";
+
+      const json = await authFetch("/users/" + currentUserId, { method: "DELETE" });
+
+      if (json && json.success) {
+        closeUserModal();
+        loadUsers();
+      } else {
+        status.textContent = (json && json.message) || "تعذر الحذف";
+        status.style.color = "#E53935";
+      }
+    }
+
+    // ━━━ إضافة مستخدم ━━━
+    function openAddModal() {
+      document.getElementById("add-error").style.display = "none";
+      document.getElementById("add-modal").classList.add("open");
+      loadCitiesOnce();
+    }
+    function closeAddModal() {
+      document.getElementById("add-modal").classList.remove("open");
+    }
+    function onAddRoleChange() {
+      const role = document.getElementById("add-role").value;
+      document.getElementById("add-city-wrap").style.display = role === "chef" ? "block" : "none";
+    }
+
+    async function loadCitiesOnce() {
+      if (citiesLoaded) return;
+      try {
+        const res = await fetch("/api/cities");
+        const json = await res.json();
+        if (json?.success && json.data) {
+          const select = document.getElementById("add-city");
+          json.data.forEach((c) => {
+            const opt = document.createElement("option");
+            opt.value = c.name_ar;
+            opt.textContent = c.name_ar;
+            select.appendChild(opt);
+          });
+          citiesLoaded = true;
+        }
+      } catch (e) {}
+    }
+
+    async function submitAddUser() {
+      const errorBox = document.getElementById("add-error");
+      const btn = document.getElementById("add-submit");
+      errorBox.style.display = "none";
+
+      const full_name = document.getElementById("add-name").value.trim();
+      const phone = document.getElementById("add-phone").value.trim();
+      const role = document.getElementById("add-role").value;
+      const city = document.getElementById("add-city").value;
+
+      if (!full_name || !phone) {
+        errorBox.textContent = "الاسم ورقم الجوال مطلوبان";
+        errorBox.style.display = "block";
+        return;
+      }
+      if (role === "chef" && !city) {
+        errorBox.textContent = "اختر مدينة الشيف";
+        errorBox.style.display = "block";
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "جاري الإنشاء...";
+
+      const json = await authFetch("/users", {
+        method: "POST",
+        body: JSON.stringify({ full_name, phone, role, city: role === "chef" ? city : undefined }),
+      });
+
+      btn.disabled = false;
+      btn.textContent = "إنشاء";
+
+      if (json && json.success) {
+        closeAddModal();
+        document.getElementById("add-name").value = "";
+        document.getElementById("add-phone").value = "";
+        loadUsers();
+      } else {
+        errorBox.textContent = (json && json.message) || "تعذر الإنشاء";
+        errorBox.style.display = "block";
+      }
+    }
+  </script>
+</body>
+</html>

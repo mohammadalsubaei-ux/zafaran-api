@@ -73,6 +73,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: 'بيانات العميل أو الشيف ناقصة' })
     }
 
+    // حارس الإيقاف: الحساب الموقوف لا ينشئ طلبات
+    const { data: customerRow } = await supabase
+      .from('users')
+      .select('is_active')
+      .eq('id', customer_id)
+      .single()
+
+    if (customerRow && customerRow.is_active === false) {
+      return res.status(403).json({ success: false, message: 'حسابك موقوف — للاستفسار تواصل مع دعم زعفران' })
+    }
+
     const isPreorder = order_type === 'preorder'
 
     if (isPreorder && !finalProposedTime) {

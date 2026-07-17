@@ -64,9 +64,14 @@ router.post('/login', async (req, res) => {
   try {
     const { phone } = req.body
     const { data, error } = await supabase
-      .from('users').select('*').eq('phone', phone).eq('is_active', true).single()
+      .from('users').select('*').eq('phone', phone).single()
     if (error || !data)
       return res.status(404).json({ success: false, message: 'رقم الجوال غير مسجل' })
+
+    // الحساب الموقوف من الإدارة: رسالة صريحة بدل "غير مسجل" المضللة
+    if (data.is_active === false)
+      return res.status(403).json({ success: false, message: 'حسابك موقوف — للاستفسار تواصل مع دعم زعفران' })
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
@@ -88,42 +93,6 @@ router.post('/push-token', async (req, res) => {
 
     if (error) throw error
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  POST /users/send-notification — إرسال إشعار
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/send-notification', async (req, res) => {
-  try {
-    const { user_id, title, body, data } = req.body
-
-    // جلب tokens المستخدم
-    const { data: tokens, error } = await supabase
-      .from('push_tokens').select('token').eq('user_id', user_id)
-    if (error) throw error
-    if (!tokens || tokens.length === 0)
-      return res.json({ success: true, message: 'لا يوجد token' })
-
-    // إرسال الإشعار عبر Expo
-    const messages = tokens.map(t => ({
-      to:    t.token,
-      sound: 'default',
-      title,
-      body,
-      data:  data || {},
-    }))
-
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body:    JSON.stringify(messages),
-    })
-
-    const result = await response.json()
-    res.json({ success: true, result })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }

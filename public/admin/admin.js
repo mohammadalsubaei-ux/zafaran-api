@@ -60,6 +60,7 @@ function renderSidebar(active) {
     { id: "orders",    label: "الطلبات",        href: "orders.html" },
     { id: "chefs",     label: "الشيفات",        href: "chefs.html" },
     { id: "drivers",   label: "المناديب",       href: "drivers.html" },
+    { id: "users",     label: "المستخدمون",     href: "users.html" },
     { id: "settings",  label: "الإعدادات",      href: "settings.html" },
   ];
 

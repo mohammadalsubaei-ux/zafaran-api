@@ -419,4 +419,234 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/users — بحث وقائمة المستخدمين
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/users', requireAdmin, async (req, res) => {
+  try {
+    const { role = '' } = req.query
+    const search = String(req.query.search || '').replace(/[,()]/g, '').trim()
+
+    let query = supabase
+      .from('users')
+      .select('id, full_name, phone, role, is_active, created_at')
+      .order('created_at', { ascending: false })
+      .limit(200)
+
+    if (role) query = query.eq('role', role)
+    if (search) query = query.or('full_name.ilike.%' + search + '%,phone.ilike.%' + search + '%')
+
+    const { data, error } = await query
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/users — إضافة مستخدم يدوياً
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/users', requireAdmin, async (req, res) => {
+  try {
+    const { full_name, phone, role = 'customer', city, neighborhood } = req.body
+
+    if (!full_name || !phone)
+      return res.status(400).json({ success: false, message: 'الاسم ورقم الجوال مطلوبان' })
+    if (!['customer', 'chef', 'driver'].includes(role))
+      return res.status(400).json({ success: false, message: 'دور غير صحيح' })
+    if (role === 'chef' && !city)
+      return res.status(400).json({ success: false, message: 'مدينة الشيف مطلوبة' })
+
+    const { data: existing } = await supabase
+      .from('users').select('id').eq('phone', phone).limit(1)
+    if (existing && existing.length > 0)
+      return res.status(409).json({ success: false, message: 'رقم الجوال مسجل مسبقاً' })
+
+    const { data, error } = await supabase
+      .from('users').insert({ phone, full_name, role }).select().single()
+    if (error) throw error
+
+    if (role === 'chef') {
+      const { error: chefErr } = await supabase.from('chefs').insert({
+        user_id: data.id, city, neighborhood: neighborhood || ''
+      })
+      if (chefErr) {
+        await supabase.from('users').delete().eq('id', data.id)
+        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف الشيف: ' + chefErr.message })
+      }
+    }
+
+    if (role === 'driver') {
+      const { error: driverErr } = await supabase.from('drivers').insert({
+        user_id: data.id, is_verified: false, is_available: false,
+        total_deliveries: 0, total_earnings: 0
+      })
+      if (driverErr) {
+        await supabase.from('users').delete().eq('id', data.id)
+        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف المندوب: ' + driverErr.message })
+      }
+    }
+
+    res.status(201).json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/users/:id — تفاصيل المستخدم وملفه حسب دوره
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data: user } = await supabase
+      .from('users').select('*').eq('id', req.params.id).single()
+    if (!user)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    let profile = null
+    if (user.role === 'chef') {
+      const { data: rows } = await supabase
+        .from('chefs')
+        .select('id, city, neighborhood, is_verified, is_open, rating_avg, total_orders, total_earnings, commission_rate')
+        .eq('user_id', user.id).limit(1)
+      profile = rows && rows[0] ? rows[0] : null
+    }
+    if (user.role === 'driver') {
+      const { data: rows } = await supabase
+        .from('drivers')
+        .select('id, is_verified, is_available, total_deliveries, total_earnings')
+        .eq('user_id', user.id).limit(1)
+      profile = rows && rows[0] ? rows[0] : null
+    }
+
+    res.json({ success: true, data: { user, profile } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/users/:id — تعديل الاسم أو الجوال
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const { full_name, phone } = req.body
+    const updates = {}
+    if (full_name && full_name.trim()) updates.full_name = full_name.trim()
+    if (phone && phone.trim()) updates.phone = phone.trim()
+
+    if (Object.keys(updates).length === 0)
+      return res.status(400).json({ success: false, message: 'لا يوجد ما يُعدَّل' })
+
+    if (updates.phone) {
+      const { data: taken } = await supabase
+        .from('users').select('id').eq('phone', updates.phone).neq('id', req.params.id).limit(1)
+      if (taken && taken.length > 0)
+        return res.status(409).json({ success: false, message: 'رقم الجوال مستخدم لحساب اخر' })
+    }
+
+    const { data, error } = await supabase
+      .from('users').update(updates).eq('id', req.params.id).select().single()
+    if (error || !data)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/users/:id/active — إيقاف/تفعيل الحساب
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/users/:id/active', requireAdmin, async (req, res) => {
+  try {
+    const { is_active } = req.body
+    if (typeof is_active !== 'boolean')
+      return res.status(400).json({ success: false, message: 'is_active يجب ان تكون true او false' })
+
+    const { data, error } = await supabase
+      .from('users').update({ is_active }).eq('id', req.params.id).select().single()
+    if (error || !data)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  DELETE /admin/users/:id — حذف بضوابط
+//  المرتبط بأي طلبات (كعميل/شيف/مندوب) لا يُحذف — يُوقَف بدلاً من ذلك
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.delete('/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const id = req.params.id
+
+    const { data: user } = await supabase
+      .from('users').select('id, role').eq('id', id).single()
+    if (!user)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    // ملفات الأدوار
+    const { data: chefRows } = await supabase
+      .from('chefs').select('id').eq('user_id', id).limit(1)
+    const chefRow = chefRows && chefRows[0] ? chefRows[0] : null
+
+    const { data: driverRows } = await supabase
+      .from('drivers').select('id').eq('user_id', id).limit(1)
+    const driverRow = driverRows && driverRows[0] ? driverRows[0] : null
+
+    // الضوابط: أي ارتباط بطلبات يمنع الحذف
+    const { count: asCustomer } = await supabase
+      .from('orders').select('id', { count: 'exact', head: true }).eq('customer_id', id)
+
+    let asChef = 0
+    if (chefRow) {
+      const { count } = await supabase
+        .from('orders').select('id', { count: 'exact', head: true }).eq('chef_id', chefRow.id)
+      asChef = count || 0
+    }
+
+    let asDriver = 0
+    if (driverRow) {
+      const { count } = await supabase
+        .from('orders').select('id', { count: 'exact', head: true }).eq('driver_id', driverRow.id)
+      asDriver = count || 0
+    }
+
+    const involvement = (asCustomer || 0) + asChef + asDriver
+    if (involvement > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'المستخدم مرتبط بـ ' + involvement + ' طلب — لحماية السجلات المالية أوقف حسابه بدلا من حذفه'
+      })
+    }
+
+    // حذف متسلسل للسجلات التابعة ثم المستخدم
+    await supabase.from('notifications').delete().eq('user_id', id)
+    await supabase.from('push_tokens').delete().eq('user_id', id)
+    await supabase.from('addresses').delete().eq('user_id', id)
+    await supabase.from('wallets').delete().eq('user_id', id)
+
+    if (chefRow) {
+      await supabase.from('menu_items').delete().eq('chef_id', chefRow.id)
+      await supabase.from('chefs').delete().eq('id', chefRow.id)
+    }
+    if (driverRow) {
+      await supabase.from('drivers').delete().eq('id', driverRow.id)
+    }
+
+    const { error: delErr } = await supabase.from('users').delete().eq('id', id)
+    if (delErr)
+      return res.status(500).json({ success: false, message: 'تعذر الحذف: ' + delErr.message })
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router
