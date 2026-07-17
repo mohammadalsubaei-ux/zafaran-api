@@ -649,4 +649,105 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/banners — كل البانرات (مفعلة وموقفة)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/banners', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('banners')
+      .select('*')
+      .order('sort_order', { ascending: true })
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/banners — إضافة بانر
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/banners', requireAdmin, async (req, res) => {
+  try {
+    const { title, subtitle, bg_color, text_color, target, sort_order } = req.body
+    if (!title || !title.trim())
+      return res.status(400).json({ success: false, message: 'عنوان البانر مطلوب' })
+
+    const { data, error } = await supabase
+      .from('banners')
+      .insert({
+        title: title.trim(),
+        subtitle: subtitle ? subtitle.trim() : null,
+        bg_color: bg_color || '#3E2410',
+        text_color: text_color || '#FDF0DC',
+        target: target || null,
+        sort_order: Number.isFinite(parseInt(sort_order)) ? parseInt(sort_order) : 0
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.status(201).json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/banners/:id — تعديل بانر (نصوص/ألوان/تفعيل/ترتيب)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/banners/:id', requireAdmin, async (req, res) => {
+  try {
+    const { title, subtitle, bg_color, text_color, target, sort_order, is_active } = req.body
+    const updates = {}
+    if (title !== undefined) {
+      if (!title || !title.trim())
+        return res.status(400).json({ success: false, message: 'عنوان البانر مطلوب' })
+      updates.title = title.trim()
+    }
+    if (subtitle !== undefined)   updates.subtitle   = subtitle ? subtitle.trim() : null
+    if (bg_color !== undefined)   updates.bg_color   = bg_color || '#3E2410'
+    if (text_color !== undefined) updates.text_color = text_color || '#FDF0DC'
+    if (target !== undefined)     updates.target     = target || null
+    if (sort_order !== undefined && Number.isFinite(parseInt(sort_order))) updates.sort_order = parseInt(sort_order)
+    if (typeof is_active === 'boolean') updates.is_active = is_active
+
+    if (Object.keys(updates).length === 0)
+      return res.status(400).json({ success: false, message: 'لا يوجد ما يعدل' })
+
+    const { data, error } = await supabase
+      .from('banners')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error || !data)
+      return res.status(404).json({ success: false, message: 'البانر غير موجود' })
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  DELETE /admin/banners/:id — حذف بانر
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.delete('/banners/:id', requireAdmin, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('banners')
+      .delete()
+      .eq('id', req.params.id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router
