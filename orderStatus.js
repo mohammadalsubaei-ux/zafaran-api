@@ -209,16 +209,9 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
     wallet = created
   }
 
-  const { error: updateErr } = await supabase
-    .from('wallets')
-    .update({
-      balance: Number(wallet.balance || 0) + amount,
-      available_balance: Number(wallet.available_balance || 0) + amount
-    })
-    .eq('id', wallet.id)
-  if (updateErr) throw updateErr
-
-  const { error: txErr } = await supabase.from('wallet_transactions').insert({
+  // القيد أولا (بمعرف المحفظة — الجدول يشترطه) ثم الرصيد
+  const { data: tx, error: txErr } = await supabase.from('wallet_transactions').insert({
+    wallet_id: wallet.id,
     user_id,
     order_id,
     amount,
@@ -226,8 +219,21 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
     status: 'completed',
     description,
     currency: 'SAR'
-  })
+  }).select('id').single()
   if (txErr) throw txErr
+
+  const { error: updateErr } = await supabase
+    .from('wallets')
+    .update({
+      balance: Number(wallet.balance || 0) + amount,
+      available_balance: Number(wallet.available_balance || 0) + amount
+    })
+    .eq('id', wallet.id)
+  if (updateErr) {
+    // فشل الرصيد بعد القيد: نحذف القيد كي لا يبقى أثر ناقص
+    await supabase.from('wallet_transactions').delete().eq('id', tx.id)
+    throw updateErr
+  }
 }
 
 async function creditDeliveredOrder(order_id) {

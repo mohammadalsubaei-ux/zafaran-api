@@ -871,7 +871,8 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
       .eq('id', wallet.id)
     if (walletErr) throw walletErr
 
-    await supabase.from('wallet_transactions').insert({
+    const { error: txErr } = await supabase.from('wallet_transactions').insert({
+      wallet_id: wallet.id,
       user_id: w.user_id,
       amount: Number(w.amount),
       type: 'withdrawal',
@@ -879,6 +880,14 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
       description: 'سحب أرباح — تم التحويل',
       currency: 'SAR'
     })
+    if (txErr) {
+      // فشل القيد بعد الخصم: نرجع الرصيد كما كان كي لا تختل المحفظة
+      await supabase
+        .from('wallets')
+        .update({ available_balance: available, balance: Number(wallet.balance || 0) })
+        .eq('id', wallet.id)
+      throw txErr
+    }
 
     await supabase
       .from('withdrawals')

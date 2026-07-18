@@ -258,6 +258,9 @@ router.get('/', async (req, res) => {
 
     if (status) query = query.eq('status', status)
 
+    // طلبات الاستلام الشخصي لا تعرض بقائمة المناديب المتاحة أبداً
+    if (status === 'ready') query = query.neq('delivery_address', 'استلام شخصي')
+
     const { data, error } = await query
     if (error) throw error
     res.json({ success: true, data })
@@ -291,7 +294,7 @@ router.patch('/:id/status', async (req, res) => {
   try {
     const { status, user_id, cancel_reason } = req.body
 
-    const chefUsable = ['accepted', 'preparing', 'ready', 'cancelled']
+    const chefUsable = ['accepted', 'preparing', 'ready', 'delivered', 'cancelled']
     if (!chefUsable.includes(status)) {
       return res.status(400).json({ success: false, message: 'حالة غير صحيحة' })
     }
@@ -319,9 +322,16 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(403).json({ success: false, message: 'غير مصرح — هذا الطلب ليس لمطبخك' })
     }
 
-    const allowed = CHEF_TRANSITIONS[order.status] || []
-    if (!allowed.includes(status)) {
-      return res.status(409).json({ success: false, message: 'لا يمكن الانتقال من "' + STATUS_AR[order.status] + '" إلى "' + STATUS_AR[status] + '"' })
+    // استلام شخصي: الشيف يوثق تسليم العميل بنفسه من حالة "جاهز" فقط
+    if (status === 'delivered') {
+      if (order.delivery_address !== 'استلام شخصي' || order.status !== 'ready') {
+        return res.status(409).json({ success: false, message: 'تسليم طلبات التوصيل يتم عبر المندوب' })
+      }
+    } else {
+      const allowed = CHEF_TRANSITIONS[order.status] || []
+      if (!allowed.includes(status)) {
+        return res.status(409).json({ success: false, message: 'لا يمكن الانتقال من "' + STATUS_AR[order.status] + '" إلى "' + STATUS_AR[status] + '"' })
+      }
     }
 
     const updated = await applyStatusChange(order, status, { cancel_reason })
