@@ -259,7 +259,7 @@ router.get('/', async (req, res) => {
     if (status) query = query.eq('status', status)
 
     // طلبات الاستلام الشخصي لا تعرض بقائمة المناديب المتاحة أبداً
-    if (status === 'ready') query = query.neq('delivery_address', 'استلام شخصي')
+    if (status === 'ready') query = query.or('delivery_address.is.null,delivery_address.neq.استلام شخصي')
 
     const { data, error } = await query
     if (error) throw error
