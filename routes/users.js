@@ -143,4 +143,46 @@ router.get('/:id/notifications', async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /users/:id/change-password — تغيير المستخدم كلمته بنفسه
+//  يتطلب الحالية للتحقق؛ الحسابات القديمة بلا كلمة تعينها مباشرة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/:id/change-password', async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body
+
+    if (!new_password || String(new_password).length < 6)
+      return res.status(400).json({ success: false, message: 'كلمة المرور الجديدة 6 احرف على الاقل' })
+
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, password_hash, password_salt')
+      .eq('id', req.params.id)
+      .single()
+
+    if (!user)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    if (user.password_hash && user.password_salt) {
+      if (!current_password)
+        return res.status(400).json({ success: false, message: 'ادخل كلمة المرور الحالية' })
+      if (hashPassword(String(current_password), user.password_salt) !== user.password_hash)
+        return res.status(401).json({ success: false, message: 'كلمة المرور الحالية غير صحيحة' })
+    }
+
+    const password_salt = generateSalt()
+    const password_hash = hashPassword(String(new_password), password_salt)
+
+    const { error } = await supabase
+      .from('users')
+      .update({ password_hash, password_salt })
+      .eq('id', user.id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router
