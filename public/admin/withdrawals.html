@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>السحوبات — زعفران</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="sidebar">
+      <div class="sidebar-logo">زعفران</div>
+      <div class="sidebar-sub">لوحة الإدارة</div>
+      <div id="sidebar-nav"></div>
+      <div class="nav-logout">
+        <div class="nav-item" onclick="logout()">تسجيل الخروج</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="page-title">طلبات السحب</div>
+      <div class="page-sub">الموافقة تخصم من محفظة الشيف وتوثق التحويل — أتمم الحوالة البنكية فعلياً قبل الموافقة</div>
+
+      <div class="toolbar">
+        <select id="status-filter" onchange="loadWithdrawals()">
+          <option value="">كل الحالات</option>
+          <option value="pending" selected>قيد المراجعة</option>
+          <option value="approved">تم التحويل</option>
+          <option value="rejected">مرفوض</option>
+        </select>
+      </div>
+
+      <div id="withdrawals-content" class="loading-state">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    const W_STATUS = {
+      pending: ["قيد المراجعة", "badge-yellow"],
+      approved: ["تم التحويل", "badge-green"],
+      rejected: ["مرفوض", "badge-red"],
+    };
+
+    (async () => {
+      const ok = await requireAuth();
+      if (!ok) return;
+
+      renderSidebar("withdrawals");
+      loadWithdrawals();
+    })();
+
+    async function loadWithdrawals() {
+      const container = document.getElementById("withdrawals-content");
+      container.className = "loading-state";
+      container.innerHTML = "جاري التحميل...";
+
+      const status = document.getElementById("status-filter").value;
+      const json = await authFetch("/withdrawals" + (status ? "?status=" + status : ""));
+
+      if (!json || !json.success) {
+        container.innerHTML = '<div class="empty-state">تعذر تحميل الطلبات — تأكد من تشغيل سكربت جدول السحوبات</div>';
+        return;
+      }
+      if (!json.data || json.data.length === 0) {
+        container.innerHTML = '<div class="empty-state">ما فيه طلبات مطابقة</div>';
+        return;
+      }
+
+      const rows = json.data.map((w) => {
+        const meta = W_STATUS[w.status] || [w.status, "badge-muted"];
+        const actions = w.status === "pending"
+          ? `<button class="btn-primary" onclick='approveW("${w.id}", ${Number(w.amount)})'>موافقة وتحويل</button>
+             <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick='rejectW("${w.id}")'>رفض</button>`
+          : (w.reject_reason ? `<span style="font-size:11px;opacity:.6">السبب: ${escapeHtml(w.reject_reason)}</span>` : "—");
+        return `
+          <tr>
+            <td>${escapeHtml(w.user?.full_name || "—")}<br><span style="font-size:11px;opacity:.55">${escapeHtml(w.user?.phone || "")}</span></td>
+            <td><b>${money(w.amount)}</b></td>
+            <td><span class="badge ${meta[1]}">${meta[0]}</span></td>
+            <td>${formatDate(w.requested_at)}</td>
+            <td>${w.processed_at ? formatDate(w.processed_at) : "—"}</td>
+            <td style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${actions}</td>
+          </tr>
+        `;
+      }).join("");
+
+      container.className = "";
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>صاحب الطلب</th><th>المبلغ</th><th>الحالة</th><th>تاريخ الطلب</th><th>المعالجة</th><th>الإجراء</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function approveW(id, amount) {
+      if (!confirm("تأكيد: هل أتممت تحويل " + amount.toFixed(2) + " ريال فعلياً لحساب الشيف؟\nالموافقة ستخصم المبلغ من محفظته وتشعره بالتحويل")) return;
+
+      const json = await authFetch("/withdrawals/" + id, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "approve" }),
+      });
+
+      if (json && json.success) loadWithdrawals();
+      else alert((json && json.message) || "تعذر التنفيذ");
+    }
+
+    async function rejectW(id) {
+      const reason = prompt("سبب الرفض (سيصل صاحب الطلب في الإشعار):");
+      if (reason === null) return;
+      if (!reason.trim()) { alert("سبب الرفض مطلوب"); return; }
+
+      const json = await authFetch("/withdrawals/" + id, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "reject", reason: reason.trim() }),
+      });
+
+      if (json && json.success) loadWithdrawals();
+      else alert((json && json.message) || "تعذر التنفيذ");
+    }
+  </script>
+</body>
+</html>

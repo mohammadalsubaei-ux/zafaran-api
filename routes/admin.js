@@ -779,4 +779,124 @@ router.patch('/users/:id/password', requireAdmin, async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/withdrawals — طلبات السحب مع بيانات أصحابها
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/withdrawals', requireAdmin, async (req, res) => {
+  try {
+    const { status = '' } = req.query
+    let query = supabase
+      .from('withdrawals')
+      .select('*')
+      .order('requested_at', { ascending: false })
+      .limit(200)
+    if (status) query = query.eq('status', status)
+
+    const { data: rows, error } = await query
+    if (error) throw error
+
+    const userIds = [...new Set((rows || []).map(r => r.user_id))]
+    let usersMap = {}
+    if (userIds.length > 0) {
+      const { data: usersRows } = await supabase
+        .from('users')
+        .select('id, full_name, phone')
+        .in('id', userIds)
+      for (const u of usersRows || []) usersMap[u.id] = u
+    }
+
+    const data = (rows || []).map(r => ({ ...r, user: usersMap[r.user_id] || null }))
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/withdrawals/:id — موافقة (خصم + توثيق تحويل) أو رفض بسبب
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
+  try {
+    const { action, reason } = req.body
+    if (!['approve', 'reject'].includes(action))
+      return res.status(400).json({ success: false, message: 'action يجب ان تكون approve او reject' })
+
+    const { data: w } = await supabase
+      .from('withdrawals')
+      .select('*')
+      .eq('id', req.params.id)
+      .single()
+
+    if (!w)
+      return res.status(404).json({ success: false, message: 'طلب السحب غير موجود' })
+    if (w.status !== 'pending')
+      return res.status(409).json({ success: false, message: 'الطلب معالج مسبقا (' + w.status + ')' })
+
+    if (action === 'reject') {
+      if (!reason || !reason.trim())
+        return res.status(400).json({ success: false, message: 'سبب الرفض مطلوب — سيصل صاحب الطلب' })
+
+      await supabase
+        .from('withdrawals')
+        .update({ status: 'rejected', reject_reason: reason.trim(), processed_at: new Date().toISOString() })
+        .eq('id', w.id)
+
+      await notifyUser(
+        w.user_id,
+        'تم رفض طلب السحب',
+        'طلبك بمبلغ ' + Number(w.amount).toFixed(2) + ' ريال رفض — السبب: ' + reason.trim(),
+        'withdrawal_rejected',
+        { withdrawal_id: w.id }
+      )
+      return res.json({ success: true })
+    }
+
+    // الموافقة: تحقق الرصيد ثم الخصم وتوثيق الحركة
+    const { data: wallet } = await supabase
+      .from('wallets')
+      .select('id, balance, available_balance')
+      .eq('user_id', w.user_id)
+      .maybeSingle()
+
+    const available = Number(wallet?.available_balance || 0)
+    if (!wallet || available < Number(w.amount))
+      return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح (' + available.toFixed(2) + ') أقل من مبلغ الطلب' })
+
+    const { error: walletErr } = await supabase
+      .from('wallets')
+      .update({
+        available_balance: available - Number(w.amount),
+        balance: Number(wallet.balance || 0) - Number(w.amount)
+      })
+      .eq('id', wallet.id)
+    if (walletErr) throw walletErr
+
+    await supabase.from('wallet_transactions').insert({
+      user_id: w.user_id,
+      amount: Number(w.amount),
+      type: 'withdrawal',
+      status: 'completed',
+      description: 'سحب أرباح — تم التحويل',
+      currency: 'SAR'
+    })
+
+    await supabase
+      .from('withdrawals')
+      .update({ status: 'approved', processed_at: new Date().toISOString() })
+      .eq('id', w.id)
+
+    await notifyUser(
+      w.user_id,
+      'تم تحويل أرباحك',
+      'تم تحويل ' + Number(w.amount).toFixed(2) + ' ريال إلى حسابك — بالتوفيق!',
+      'withdrawal_approved',
+      { withdrawal_id: w.id }
+    )
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router

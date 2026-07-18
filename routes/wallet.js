@@ -1,6 +1,8 @@
 const express = require("express")
 const router = express.Router()
 const supabase = require("../supabase")
+const getSettings = require("../settings")
+const notifyUser = require("../notify")
 
 /**
  * Helper: Get or create wallet for user
@@ -62,6 +64,15 @@ router.get("/:userId", async (req, res) => {
     const { userId } = req.params
     const wallet = await getOrCreateWallet(userId)
 
+    const s = await getSettings()
+    const { data: pendingRows } = await supabase
+      .from("withdrawals")
+      .select("id, amount")
+      .eq("user_id", userId)
+      .eq("status", "pending")
+      .limit(1)
+    const pendingWithdrawal = pendingRows && pendingRows[0] ? pendingRows[0] : null
+
     res.json({
       success: true,
       data: {
@@ -72,6 +83,8 @@ router.get("/:userId", async (req, res) => {
         pending_balance: Number(wallet.pending_balance || 0),
         balance: Number(wallet.balance || 0),
         currency: wallet.currency || "SAR",
+        min_withdrawal_amount: Number(s.min_withdrawal_amount || 200),
+        pending_withdrawal: pendingWithdrawal,
       },
     })
   } catch (err) {
@@ -249,6 +262,82 @@ router.post("/:userId/use-credit", async (req, res) => {
         compensations_used: updates.length,
       },
     })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+/**
+ * GET /api/wallet/:userId/withdrawals
+ * سجل طلبات السحب للمستخدم
+ */
+router.get("/:userId/withdrawals", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("withdrawals")
+      .select("*")
+      .eq("user_id", req.params.userId)
+      .order("requested_at", { ascending: false })
+      .limit(50)
+
+    if (error) throw error
+    res.json({ success: true, data: data || [] })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+/**
+ * POST /api/wallet/:userId/withdraw
+ * طلب سحب أرباح — Body: { amount }
+ * الضوابط: محفظة قابلة للسحب، المبلغ >= الحد الأدنى، <= الرصيد المتاح، لا طلب معلق
+ */
+router.post("/:userId/withdraw", async (req, res) => {
+  try {
+    const { userId } = req.params
+    const amt = parseFloat(req.body.amount)
+
+    if (!isFinite(amt) || amt <= 0)
+      return res.status(400).json({ success: false, message: "ادخل مبلغا صحيحا" })
+
+    const wallet = await getOrCreateWallet(userId)
+    if (!wallet.is_withdrawable)
+      return res.status(403).json({ success: false, message: "هذه المحفظة غير قابلة للسحب" })
+
+    const s = await getSettings()
+    if (amt < Number(s.min_withdrawal_amount || 200))
+      return res.status(400).json({ success: false, message: "الحد الأدنى للسحب " + Number(s.min_withdrawal_amount || 200) + " ريال" })
+
+    if (amt > Number(wallet.available_balance || 0))
+      return res.status(400).json({ success: false, message: "المبلغ أكبر من رصيدك المتاح (" + Number(wallet.available_balance || 0).toFixed(2) + " ريال)" })
+
+    const { data: pendingRows } = await supabase
+      .from("withdrawals")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("status", "pending")
+      .limit(1)
+
+    if (pendingRows && pendingRows.length > 0)
+      return res.status(409).json({ success: false, message: "لديك طلب سحب قيد المراجعة — انتظر معالجته أولا" })
+
+    const { data, error } = await supabase
+      .from("withdrawals")
+      .insert({ user_id: userId, amount: amt })
+      .select()
+      .single()
+
+    if (error) throw error
+
+    await notifyUser(
+      userId,
+      "تم استلام طلب السحب",
+      "طلبك بمبلغ " + amt.toFixed(2) + " ريال قيد المراجعة وسنعلمك فور معالجته",
+      "withdrawal_requested",
+      { withdrawal_id: data.id }
+    )
+
+    res.status(201).json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }

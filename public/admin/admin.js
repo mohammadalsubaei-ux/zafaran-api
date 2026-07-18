@@ -62,6 +62,7 @@ function renderSidebar(active) {
     { id: "drivers",   label: "المناديب",       href: "drivers.html" },
     { id: "users",     label: "المستخدمون",     href: "users.html" },
     { id: "banners",   label: "البانرات",       href: "banners.html" },
+    { id: "withdrawals", label: "السحوبات",     href: "withdrawals.html" },
     { id: "settings",  label: "الإعدادات",      href: "settings.html" },
   ];
 
