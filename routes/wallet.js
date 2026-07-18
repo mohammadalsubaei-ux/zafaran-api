@@ -239,9 +239,7 @@ router.post("/:userId/use-credit", async (req, res) => {
     }
 
     // Record wallet transaction
-    const txWallet = await getOrCreateWallet(userId)
     await supabase.from("wallet_transactions").insert({
-      wallet_id: txWallet.id,
       user_id: userId,
       order_id: order_id,
       amount: amount,
@@ -325,7 +323,7 @@ router.post("/:userId/withdraw", async (req, res) => {
 
     const { data, error } = await supabase
       .from("withdrawals")
-      .insert({ user_id: userId, amount: amt })
+      .insert({ user_id: userId, wallet_id: wallet.id, amount: amt, status: "pending" })
       .select()
       .single()
 

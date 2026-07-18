@@ -872,7 +872,6 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
     if (walletErr) throw walletErr
 
     const { error: txErr } = await supabase.from('wallet_transactions').insert({
-      wallet_id: wallet.id,
       user_id: w.user_id,
       amount: Number(w.amount),
       type: 'withdrawal',

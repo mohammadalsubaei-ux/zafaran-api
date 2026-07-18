@@ -211,7 +211,6 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
 
   // القيد أولا (بمعرف المحفظة — الجدول يشترطه) ثم الرصيد
   const { data: tx, error: txErr } = await supabase.from('wallet_transactions').insert({
-    wallet_id: wallet.id,
     user_id,
     order_id,
     amount,
