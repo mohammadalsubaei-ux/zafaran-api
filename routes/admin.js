@@ -750,4 +750,33 @@ router.delete('/banners/:id', requireAdmin, async (req, res) => {
   }
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/users/:id/password — تعيين كلمة مرور للمستخدم
+//  (مسار الدعم: حسابات قديمة او "نسيت كلمة المرور" حتى يتوفر OTP)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/users/:id/password', requireAdmin, async (req, res) => {
+  try {
+    const { password } = req.body
+    if (!password || String(password).length < 6)
+      return res.status(400).json({ success: false, message: 'كلمة المرور 6 احرف على الاقل' })
+
+    const password_salt = generateSalt()
+    const password_hash = hashPassword(String(password), password_salt)
+
+    const { data, error } = await supabase
+      .from('users')
+      .update({ password_hash, password_salt })
+      .eq('id', req.params.id)
+      .select('id')
+      .single()
+
+    if (error || !data)
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
 module.exports = router

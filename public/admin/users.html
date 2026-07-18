@@ -204,6 +204,13 @@
 
         ${profileBlock(user, profile)}
 
+        <div style="font-weight:800;font-size:13px;color:#C97D20;margin:16px 0 8px">كلمة المرور</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <input type="password" id="set-pw" placeholder="كلمة مرور جديدة (6 أحرف فأكثر)" style="flex:1;min-width:200px" />
+          <button class="btn-ghost" onclick="setUserPassword()">تعيين</button>
+          <span id="pw-status" style="font-size:12px;min-width:80px"></span>
+        </div>
+
         <div style="font-weight:800;font-size:13px;color:#E53935;margin:20px 0 8px">منطقة الخطر</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick="toggleActive(${suspended})">
@@ -288,6 +295,30 @@
         loadUsers();
       } else {
         status.textContent = (json && json.message) || "تعذر الحذف";
+        status.style.color = "#E53935";
+      }
+    }
+
+    async function setUserPassword() {
+      const status = document.getElementById("pw-status");
+      const pw = document.getElementById("set-pw").value;
+      if (!pw || pw.length < 6) {
+        status.textContent = "6 أحرف على الأقل";
+        status.style.color = "#E53935";
+        return;
+      }
+      status.textContent = "جاري التعيين...";
+      status.style.color = "";
+      const json = await authFetch("/users/" + currentUserId + "/password", {
+        method: "PATCH",
+        body: JSON.stringify({ password: pw }),
+      });
+      if (json && json.success) {
+        status.textContent = "تم التعيين";
+        status.style.color = "#4CAF50";
+        document.getElementById("set-pw").value = "";
+      } else {
+        status.textContent = (json && json.message) || "تعذر التعيين";
         status.style.color = "#E53935";
       }
     }
