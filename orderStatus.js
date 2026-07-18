@@ -147,6 +147,11 @@ async function applyStatusChange(order, status, opts = {}) {
     }
   }
 
+  // ━━━ ترصيد الأرباح عند التسليم ━━━
+  if (status === 'delivered') {
+    await creditDeliveredOrder(order.id)
+  }
+
   // ━━━ إشعار العميل ━━━
   const statusMessages = {
     accepted:   { title: 'تم قبول طلبك',   body: 'الشيفة قبلت طلبك وبدأت التحضير', type: 'order_accepted'   },
@@ -174,4 +179,98 @@ async function applyStatusChange(order, status, opts = {}) {
   return updated
 }
 
-module.exports = { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  ترصيد أرباح الطلب المسلّم بمحافظ الشيف والمندوب
+//  محصّنة ضد الازدواج: قيد واحد لكل طلب مهما تكرر النداء
+//  لا ترمي أخطاء أبداً — تسجّلها فقط كي لا تعطل مسار التسليم
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function creditWallet(user_id, amount, walletType, description, order_id) {
+  let { data: wallet } = await supabase
+    .from('wallets')
+    .select('id, balance, available_balance')
+    .eq('user_id', user_id)
+    .maybeSingle()
+
+  if (!wallet) {
+    const { data: created, error: createErr } = await supabase
+      .from('wallets')
+      .insert({
+        user_id,
+        wallet_type: walletType,
+        is_withdrawable: true,
+        balance: 0,
+        available_balance: 0,
+        pending_balance: 0,
+        currency: 'SAR'
+      })
+      .select('id, balance, available_balance')
+      .single()
+    if (createErr) throw createErr
+    wallet = created
+  }
+
+  const { error: updateErr } = await supabase
+    .from('wallets')
+    .update({
+      balance: Number(wallet.balance || 0) + amount,
+      available_balance: Number(wallet.available_balance || 0) + amount
+    })
+    .eq('id', wallet.id)
+  if (updateErr) throw updateErr
+
+  const { error: txErr } = await supabase.from('wallet_transactions').insert({
+    user_id,
+    order_id,
+    amount,
+    type: 'order_earning',
+    status: 'completed',
+    description,
+    currency: 'SAR'
+  })
+  if (txErr) throw txErr
+}
+
+async function creditDeliveredOrder(order_id) {
+  try {
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, status, chef_id, driver_id, chef_share, driver_share')
+      .eq('id', order_id)
+      .single()
+
+    if (!order || order.status !== 'delivered') return
+
+    // درع الازدواج: قيد سابق لنفس الطلب = لا شيء يُعاد
+    const { data: existing } = await supabase
+      .from('wallet_transactions')
+      .select('id')
+      .eq('order_id', order_id)
+      .eq('type', 'order_earning')
+      .limit(1)
+    if (existing && existing.length > 0) return
+
+    const shortId = String(order.id).slice(0, 8)
+
+    const chefShare = Number(order.chef_share || 0)
+    if (order.chef_id && chefShare > 0) {
+      const { data: chef } = await supabase
+        .from('chefs').select('user_id').eq('id', order.chef_id).single()
+      if (chef?.user_id) {
+        await creditWallet(chef.user_id, chefShare, 'chef', 'أرباح الطلب #' + shortId, order.id)
+      }
+    }
+
+    const driverShare = Number(order.driver_share || 0)
+    if (order.driver_id && driverShare > 0) {
+      const { data: driver } = await supabase
+        .from('drivers').select('user_id').eq('id', order.driver_id).single()
+      if (driver?.user_id) {
+        await creditWallet(driver.user_id, driverShare, 'driver', 'أرباح توصيل الطلب #' + shortId, order.id)
+      }
+    }
+  } catch (err) {
+    console.error('creditDeliveredOrder failed for order', order_id, ':', err.message)
+  }
+}
+
+module.exports = { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange, creditDeliveredOrder }

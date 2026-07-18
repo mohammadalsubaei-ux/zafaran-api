@@ -2,6 +2,7 @@
 const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
+const { creditDeliveredOrder } = require('../orderStatus')
 
 router.get('/:id', async (req, res) => {
   try {
@@ -141,6 +142,9 @@ router.post('/:id/delivered/:order_id', async (req, res) => {
     // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
     // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —
     // لا نلمسها هنا إطلاقاً لتجنب العدّ المزدوج
+
+    // ترصيد أرباح الشيف والمندوب بالمحافظ (محصّن ضد الازدواج داخلياً)
+    await creditDeliveredOrder(order_id)
     await notifyUser(
       order.customer_id,
       'وصل طلبك',
