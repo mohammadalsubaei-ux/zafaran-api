@@ -98,7 +98,7 @@ router.post('/', async (req, res) => {
 
     const { data: menuItems, error: menuErr } = await supabase
       .from('menu_items')
-      .select('id, name, price')
+      .select('id, name, price, status, chef_id')
       .in('id', itemIds)
 
     if (menuErr) throw menuErr
@@ -109,6 +109,18 @@ router.post('/', async (req, res) => {
       const menuItem = menuItems.find(m => m.id === item.menu_item_id)
 
       if (!menuItem) throw new Error('أحد المنتجات غير موجود')
+
+      // حراس المنتج: الانتماء لنفس الأسرة + الحالة الثلاثية
+      if (menuItem.chef_id !== chef_id) {
+        throw new Error('أحد المنتجات لا يتبع هذه الأسرة المنتجة')
+      }
+      const itemStatus = menuItem.status || 'available'
+      if (itemStatus === 'unavailable') {
+        throw new Error('"' + menuItem.name + '" غير متوفر حالياً — احذفه من السلة وحاول من جديد')
+      }
+      if (itemStatus === 'preorder' && !isPreorder) {
+        throw new Error('"' + menuItem.name + '" متاح بالحجز المسبق فقط — اختر وقتاً للتسليم')
+      }
 
       const quantity = Number(item.quantity || 1)
       const price = Number(menuItem.price || 0)
@@ -133,9 +145,21 @@ router.post('/', async (req, res) => {
     // جلب إحداثيات الشيف ونسبة عمولته المخصصة لحساب المسافة والحصص
     const { data: chefLocation } = await supabase
       .from('chefs')
-      .select('lat, lng, user_id, commission_rate')
+      .select('lat, lng, user_id, commission_rate, status')
       .eq('id', chef_id)
       .single()
+
+    // حراس الأسرة المنتجة: الوجود + الحالة الثلاثية
+    if (!chefLocation) {
+      return res.status(404).json({ success: false, message: 'الأسرة المنتجة غير موجودة' })
+    }
+    const chefStatus = chefLocation.status || 'open'
+    if (chefStatus === 'closed') {
+      return res.status(403).json({ success: false, message: 'الأسرة المنتجة مغلقة حالياً — جرب لاحقاً أو تصفح أسراً أخرى' })
+    }
+    if (chefStatus === 'preorder' && !isPreorder) {
+      return res.status(400).json({ success: false, message: 'هذه الأسرة تستقبل الطلبات المسبقة فقط حالياً — اختر وقتاً للتسليم' })
+    }
 
     const distance_km = isPickup
       ? 0
