@@ -335,15 +335,33 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(409).json({ success: false, message: 'الطلب بحالة نهائية (' + STATUS_AR[order.status] + ') ولا يمكن تعديله' })
     }
 
-    // الملكية: فقط شيف الطلب يغيّر حالته من التطبيق
+    // تحديد المتصرف: شيف الأسرة أم العميل صاحب الطلب
     const { data: chef } = await supabase
       .from('chefs')
       .select('user_id')
       .eq('id', order.chef_id)
       .single()
 
-    if (!chef || chef.user_id !== user_id) {
-      return res.status(403).json({ success: false, message: 'غير مصرح — هذا الطلب ليس لمطبخك' })
+    const isChefActor = !!chef && chef.user_id === user_id
+    const isCustomerActor = order.customer_id === user_id
+
+    if (!isChefActor && !isCustomerActor) {
+      return res.status(403).json({ success: false, message: 'غير مصرح بتعديل هذا الطلب' })
+    }
+
+    // مسار العميل: إلغاء فقط، وقبل قبول الأسرة للطلب
+    if (isCustomerActor && !isChefActor) {
+      if (status !== 'cancelled') {
+        return res.status(403).json({ success: false, message: 'غير مصرح — يمكنك إلغاء الطلب فقط' })
+      }
+      if (!['pending', 'pending_time'].includes(order.status)) {
+        return res.status(409).json({ success: false, message: 'ما عاد يمكن الإلغاء — الأسرة بدأت بتجهيز طلبك، تواصل مع الدعم وسنساعدك' })
+      }
+      const updated = await applyStatusChange(order, 'cancelled', {
+        cancel_reason: cancel_reason && cancel_reason.trim() ? cancel_reason.trim() : 'ألغاه العميل',
+        notifyChef: true
+      })
+      return res.json({ success: true, data: updated })
     }
 
     // استلام شخصي: الشيف يوثق تسليم العميل بنفسه من حالة "جاهز" فقط
