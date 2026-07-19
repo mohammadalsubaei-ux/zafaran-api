@@ -384,6 +384,137 @@ router.patch('/:id/status', async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /orders/:id/renotify-drivers — العميل يعيد نداء المناديب عند طول الانتظار
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/:id/renotify-drivers', async (req, res) => {
+  try {
+    const { user_id } = req.body
+    if (!user_id) {
+      return res.status(401).json({ success: false, message: 'التحقق من الهوية مطلوب' })
+    }
+
+    const order = await getOrderCore(req.params.id)
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    }
+    if (order.customer_id !== user_id) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+    if (order.status !== 'ready' || order.driver_id) {
+      return res.status(409).json({ success: false, message: 'الطلب ليس بانتظار مندوب' })
+    }
+    if (order.delivery_address === 'استلام شخصي') {
+      return res.status(400).json({ success: false, message: 'هذا طلب استلام شخصي' })
+    }
+
+    const { data: availableDrivers } = await supabase
+      .from('drivers')
+      .select('id, user_id')
+      .eq('is_available', true)
+
+    if (availableDrivers && availableDrivers.length > 0) {
+      await Promise.all(
+        availableDrivers.map(driver =>
+          notifyUser(
+            driver.user_id,
+            'طلب توصيل بانتظارك',
+            'عميل ينتظر مندوباً منذ دقائق — اضغط لقبول الطلب',
+            'delivery_request',
+            { order_id: order.id }
+          )
+        )
+      )
+    }
+
+    res.json({ success: true, notified: availableDrivers ? availableDrivers.length : 0 })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /orders/:id/switch-to-pickup — تحويل العميل طلبه لاستلام شخصي
+//  (خياره عند غياب المناديب) مع إعادة تسعير كاملة: حذف رسوم التوصيل وحصصها
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/:id/switch-to-pickup', async (req, res) => {
+  try {
+    const { user_id } = req.body
+    if (!user_id) {
+      return res.status(401).json({ success: false, message: 'التحقق من الهوية مطلوب' })
+    }
+
+    const order = await getOrderCore(req.params.id)
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    }
+    if (order.customer_id !== user_id) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+    if (order.status !== 'ready' || order.driver_id) {
+      return res.status(409).json({ success: false, message: 'التحويل متاح فقط والطلب جاهز بانتظار مندوب' })
+    }
+    if (order.delivery_address === 'استلام شخصي') {
+      return res.status(400).json({ success: false, message: 'الطلب استلام شخصي أصلاً' })
+    }
+
+    const { data: full } = await supabase
+      .from('orders')
+      .select('subtotal, chef_share, delivery_fee')
+      .eq('id', order.id)
+      .single()
+
+    const subtotal  = Number(full?.subtotal || 0)
+    const chefShare = Number(full?.chef_share || 0)
+    const savedFee  = Number(full?.delivery_fee || 0)
+
+    const { data: updated, error } = await supabase
+      .from('orders')
+      .update({
+        delivery_address: 'استلام شخصي',
+        delivery_fee: 0,
+        driver_share: 0,
+        platform_fee: parseFloat((subtotal - chefShare).toFixed(2)),
+        total: parseFloat(subtotal.toFixed(2))
+      })
+      .eq('id', order.id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    const { data: chefRow } = await supabase
+      .from('chefs')
+      .select('user_id')
+      .eq('id', order.chef_id)
+      .single()
+
+    if (chefRow?.user_id) {
+      await notifyUser(
+        chefRow.user_id,
+        'تحول لاستلام شخصي',
+        'العميل سيستلم الطلب بنفسه من موقعكم — بانتظار وصوله',
+        'order_pickup_switch',
+        { order_id: order.id }
+      )
+    }
+
+    await notifyUser(
+      order.customer_id,
+      'تم التحويل لاستلام شخصي',
+      savedFee > 0
+        ? 'وفرت رسوم التوصيل (' + savedFee.toFixed(2) + ' ر.س) — استلم طلبك من موقع الأسرة المنتجة'
+        : 'استلم طلبك من موقع الأسرة المنتجة',
+      'order_pickup_switch',
+      { order_id: order.id }
+    )
+
+    res.json({ success: true, data: updated })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /orders/:id/confirm-time — رد الشيف على الوقت المقترح
 //  body: { action: 'accept' | 'counter', counter_time? }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
