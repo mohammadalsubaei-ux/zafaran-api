@@ -35,8 +35,18 @@
       loadChefs();
     })();
 
+    let CERT_GRACE_DAYS = 30;
+
     async function loadChefs() {
       const container = document.getElementById("chefs-content");
+
+      // مهلة شهادة العمل الحر من إعدادات المنصة (المصدر الوحيد)
+      const settings = await authFetch("/settings");
+      if (settings && settings.success && Array.isArray(settings.data)) {
+        const g = settings.data.find((s) => s.key === "freelance_cert_grace_days");
+        if (g) CERT_GRACE_DAYS = parseInt(g.value, 10) || 30;
+      }
+
       const json = await authFetch("/chefs");
 
       if (!json || !json.success) {
@@ -57,6 +67,8 @@
             ? '<span class="badge badge-yellow">حجز مسبق</span>'
             : '<span class="badge badge-red">مغلق</span>';
 
+          const certBadge = certStatus(c);
+
           const verifyBadge = c.is_verified
             ? '<span class="badge badge-green">موثّق</span>'
             : `<button class="btn-small" onclick="verifyChef('${c.id}')">توثيق</button>`;
@@ -69,6 +81,7 @@
               <td>${statusBadge}</td>
               <td>${c.total_orders || 0}</td>
               <td>${money(c.total_earnings)}</td>
+              <td>${certBadge}</td>
               <td>${verifyBadge}</td>
             </tr>
           `;
@@ -87,6 +100,7 @@
                 <th>الحالة</th>
                 <th>الطلبات</th>
                 <th>الأرباح</th>
+                <th>شهادة العمل الحر</th>
                 <th>التوثيق</th>
               </tr>
             </thead>
@@ -94,6 +108,20 @@
           </table>
         </div>
       `;
+    }
+
+    function certStatus(c) {
+      if (c.freelance_cert_url) {
+        const d = c.freelance_cert_uploaded_at
+          ? new Date(c.freelance_cert_uploaded_at).toLocaleDateString("ar-SA")
+          : "";
+        return `<a class="badge badge-green" href="${c.freelance_cert_url}" target="_blank" style="text-decoration:none">عرض${d ? " · " + d : ""}</a>`;
+      }
+      const created = c.created_at ? new Date(c.created_at).getTime() : Date.now();
+      const daysUsed = Math.floor((Date.now() - created) / 86400000);
+      const left = CERT_GRACE_DAYS - daysUsed;
+      if (left >= 0) return `<span class="badge badge-yellow">متبقي ${left} يوم</span>`;
+      return `<span class="badge badge-red">متأخر ${-left} يوم</span>`;
     }
 
     async function verifyChef(id) {

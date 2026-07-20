@@ -65,6 +65,27 @@ router.get('/', async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /chefs/cert-grace — مهلة رفع شهادة العمل الحر (بالأيام)
+//  المصدر الوحيد: app_settings (الأدمن يعدلها من لوحته)
+//  ملاحظة: هذا المسار قبل /:id عمداً — ترتيب الراوتات حاسم
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/cert-grace', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'freelance_cert_grace_days')
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data: { grace_days: parseInt(data.value, 10) || 30 } })
+  } catch (err) {
+    // في أسوأ الحالات نرجع 30 يوم كافتراض آمن بدل كسر لوحة الشيف
+    res.json({ success: true, data: { grace_days: 30 } })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /chefs/:id — طباخة معينة + قائمتها
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/:id', async (req, res) => {
@@ -175,6 +196,36 @@ router.patch('/:id/location', async (req, res) => {
     const { data, error } = await supabase
       .from('chefs')
       .update({ lat, lng })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /chefs/:id/freelance-cert — حفظ شهادة العمل الحر
+//  body: { cert_url }
+//  الحقل غير إلزامي بالتسجيل — يُرفع من لوحة الشيف خلال المهلة
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/freelance-cert', async (req, res) => {
+  try {
+    const { cert_url } = req.body
+
+    if (!cert_url || typeof cert_url !== 'string' || !cert_url.startsWith('https://')) {
+      return res.status(400).json({ success: false, message: 'رابط الشهادة غير صالح' })
+    }
+
+    const { data, error } = await supabase
+      .from('chefs')
+      .update({
+        freelance_cert_url: cert_url,
+        freelance_cert_uploaded_at: new Date().toISOString()
+      })
       .eq('id', req.params.id)
       .select()
       .single()
