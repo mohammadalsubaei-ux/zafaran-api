@@ -110,9 +110,9 @@ router.post('/', async (req, res) => {
 
       if (!menuItem) throw new Error('أحد المنتجات غير موجود')
 
-      // حراس المنتج: الانتماء لنفس الأسرة + الحالة الثلاثية
+      // حراس المنتج: الانتماء لنفس المتجر + الحالة الثلاثية
       if (menuItem.chef_id !== chef_id) {
-        throw new Error('أحد المنتجات لا يتبع هذه الأسرة المنتجة')
+        throw new Error('أحد المنتجات لا يتبع هذا المتجر')
       }
       const itemStatus = menuItem.status || 'available'
       if (itemStatus === 'unavailable') {
@@ -149,16 +149,16 @@ router.post('/', async (req, res) => {
       .eq('id', chef_id)
       .single()
 
-    // حراس الأسرة المنتجة: الوجود + الحالة الثلاثية
+    // حراس المتجر: الوجود + الحالة الثلاثية
     if (!chefLocation) {
-      return res.status(404).json({ success: false, message: 'الأسرة المنتجة غير موجودة' })
+      return res.status(404).json({ success: false, message: 'المتجر غير موجود' })
     }
     const chefStatus = chefLocation.status || 'open'
     if (chefStatus === 'closed') {
-      return res.status(403).json({ success: false, message: 'الأسرة المنتجة مغلقة حالياً — جرب لاحقاً أو تصفح أسراً أخرى' })
+      return res.status(403).json({ success: false, message: 'المتجر مغلق حالياً — جرب لاحقاً أو تصفح متاجر أخرى' })
     }
     if (chefStatus === 'preorder' && !isPreorder) {
-      return res.status(400).json({ success: false, message: 'هذه الأسرة تستقبل الطلبات المسبقة فقط حالياً — اختر وقتاً للتسليم' })
+      return res.status(400).json({ success: false, message: 'هذا المتجر يستقبل الطلبات المسبقة فقط حالياً — اختر وقتاً للتسليم' })
     }
 
     const distance_km = isPickup
@@ -335,7 +335,7 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(409).json({ success: false, message: 'الطلب بحالة نهائية (' + STATUS_AR[order.status] + ') ولا يمكن تعديله' })
     }
 
-    // تحديد المتصرف: شيف الأسرة أم العميل صاحب الطلب
+    // تحديد المتصرف: صاحب المتجر أم العميل صاحب الطلب
     const { data: chef } = await supabase
       .from('chefs')
       .select('user_id')
@@ -349,13 +349,13 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(403).json({ success: false, message: 'غير مصرح بتعديل هذا الطلب' })
     }
 
-    // مسار العميل: إلغاء فقط، وقبل قبول الأسرة للطلب
+    // مسار العميل: إلغاء فقط، وقبل قبول المتجر للطلب
     if (isCustomerActor && !isChefActor) {
       if (status !== 'cancelled') {
         return res.status(403).json({ success: false, message: 'غير مصرح — يمكنك إلغاء الطلب فقط' })
       }
       if (!['pending', 'pending_time'].includes(order.status)) {
-        return res.status(409).json({ success: false, message: 'ما عاد يمكن الإلغاء — الأسرة بدأت بتجهيز طلبك، تواصل مع الدعم وسنساعدك' })
+        return res.status(409).json({ success: false, message: 'ما عاد يمكن الإلغاء — المتجر بدأ بتجهيز طلبك، تواصل مع الدعم وسنساعدك' })
       }
       const updated = await applyStatusChange(order, 'cancelled', {
         cancel_reason: cancel_reason && cancel_reason.trim() ? cancel_reason.trim() : 'ألغاه العميل',
@@ -502,8 +502,8 @@ router.post('/:id/switch-to-pickup', async (req, res) => {
       order.customer_id,
       'تم التحويل لاستلام شخصي',
       savedFee > 0
-        ? 'وفرت رسوم التوصيل (' + savedFee.toFixed(2) + ' ر.س) — استلم طلبك من موقع الأسرة المنتجة'
-        : 'استلم طلبك من موقع الأسرة المنتجة',
+        ? 'وفرت رسوم التوصيل (' + savedFee.toFixed(2) + ' ر.س) — استلم طلبك من موقع المتجر'
+        : 'استلم طلبك من موقع المتجر',
       'order_pickup_switch',
       { order_id: order.id }
     )
