@@ -26,6 +26,13 @@ app.use('/api/tracking',  require('./routes/tracking'))
 app.use('/api/notifications', require('./routes/notifications'))
 app.use('/store', require('./routes/store'))
 
+// الصفحات القانونية العامة (مطلوبة لمتاجر التطبيقات)
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public/legal/privacy.html')))
+app.get('/terms',   (req, res) => res.sendFile(path.join(__dirname, 'public/legal/terms.html')))
+
+// فحص صحة السيرفر — للمراقبة السريعة من لوحة الأدمن
+app.get('/api/health', (req, res) => res.json({ success: true, service: 'zafaran-api', time: new Date().toISOString() }))
+
 // ── Health Check ──
 app.get('/', (req, res) => {
   res.json({ app: 'زعفران API', version: '1.0.0', status: '🟢 شغّال' })
