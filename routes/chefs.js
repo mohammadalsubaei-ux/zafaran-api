@@ -18,11 +18,20 @@ router.get('/search', async (req, res) => {
 
     if (error) throw error
 
+    // نجمع الشيفات ونرفق مع كل واحدة الأصناف المطابقة تحت المفتاح menu
+    // (الواجهة تعتمد على chef.menu للفلترة بالتصنيف وعرض الصورة)
     const chefsMap = new Map()
+
     data.forEach(item => {
-      if (item.chefs && item.chefs.status !== 'closed' && item.chefs.is_verified && !chefsMap.has(item.chefs.id)) {
-        chefsMap.set(item.chefs.id, item.chefs)
+      const chef = item.chefs
+      if (!chef || chef.status === 'closed' || !chef.is_verified) return
+
+      if (!chefsMap.has(chef.id)) {
+        chefsMap.set(chef.id, { ...chef, menu: [] })
       }
+
+      const { chefs, ...menuItem } = item
+      chefsMap.get(chef.id).menu.push(menuItem)
     })
 
     res.json({ success: true, data: Array.from(chefsMap.values()) })
@@ -34,6 +43,7 @@ router.get('/search', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /chefs — كل الطباخات المتاحة
 //  status: open | preorder | closed
+//  ملاحظة: menu_items تُرجع دائماً باسم menu — الواجهة تفلتر التصنيفات عليها
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/', async (req, res) => {
   try {
@@ -41,7 +51,7 @@ router.get('/', async (req, res) => {
 
     let query = supabase
       .from('chefs')
-      .select(`*, users ( full_name, avatar_url, phone )`)
+      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items ( id, name, price, image_url, category, status )`)
 
     if (!user_id) query = query.eq('is_verified', true)
     if (city)    query = query.eq('city', city)
@@ -58,7 +68,14 @@ router.get('/', async (req, res) => {
     const { data, error } = await query.order('rating_avg', { ascending: false })
 
     if (error) throw error
-    res.json({ success: true, data })
+
+    // الأصناف غير المتوفرة لا تُحتسب في التصنيفات ولا تُعرض
+    const clean = (data || []).map(chef => ({
+      ...chef,
+      menu: (chef.menu || []).filter(item => item.status !== 'unavailable')
+    }))
+
+    res.json({ success: true, data: clean })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }

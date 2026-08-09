@@ -153,6 +153,13 @@ router.post('/', async (req, res) => {
     if (!chefLocation) {
       return res.status(404).json({ success: false, message: 'المتجر غير موجود' })
     }
+
+    // حارس الطلب الذاتي: صاحب المتجر لا يطلب من متجره
+    // (يولّد عمولة وحصصاً وهمية في الدفتر ويضخّم عداد الطلبات والتقييمات)
+    if (chefLocation.user_id === customer_id) {
+      return res.status(403).json({ success: false, message: 'لا يمكنك الطلب من متجرك — تصفح متاجر أخرى' })
+    }
+
     const chefStatus = chefLocation.status || 'open'
     if (chefStatus === 'closed') {
       return res.status(403).json({ success: false, message: 'المتجر مغلق حالياً — جرب لاحقاً أو تصفح متاجر أخرى' })
@@ -167,6 +174,12 @@ router.post('/', async (req, res) => {
           chefLocation?.lat, chefLocation?.lng,
           delivery_lat, delivery_lng
         )
+
+    // حارس الإحداثيات: طلب توصيل بدون موقع صالح يُرفض
+    // (بدونه تُحتسب الرسوم الأساسية مهما بعدت المسافة)
+    if (!isPickup && distance_km == null) {
+      return res.status(400).json({ success: false, message: 'تعذر تحديد موقع التوصيل — حدد موقعك من جديد ثم أعد المحاولة' })
+    }
 
     const delivery_fee = isPickup ? 0 : calcDeliveryFee(distance_km, s)
 
@@ -579,10 +592,10 @@ router.patch('/:id/confirm-time', async (req, res) => {
 
     await notifyUser(
       order.customer_id,
-      normalizedAction === 'accept' ? 'الشيف أكد وقت طلبك' : 'الشيف اقترح وقتاً بديلاً',
+      normalizedAction === 'accept' ? 'المتجر أكد وقت طلبك' : 'المتجر اقترح وقتاً بديلاً',
       normalizedAction === 'accept'
         ? 'تم تأكيد موعد طلبك، يمكنك إتمام الدفع الآن'
-        : `الشيف اقترح موعد ${finalCounterTime} بدل موعدك — وافق أو ألغِ الطلب`,
+        : `المتجر اقترح موعد ${finalCounterTime} بدل موعدك — وافق أو ألغِ الطلب`,
       normalizedAction === 'accept' ? 'preorder_time_accepted' : 'preorder_time_countered',
       { order_id: order.id }
     )
