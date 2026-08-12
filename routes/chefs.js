@@ -3,35 +3,76 @@ const router = express.Router()
 const supabase = require('../supabase')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  GET /chefs/search?q= — بحث
+//  GET /chefs/search?q= — بحث شامل
+//  يغطي: اسم المنتج + اسم المتجر + المدينة + الحي
+//  (كان يبحث في أسماء المنتجات فقط، فالبحث بالمدينة لا يرجع شيئاً)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/search', async (req, res) => {
   try {
-    const { q } = req.query
+    const q = String(req.query.q || '').trim()
     if (!q) return res.json({ success: true, data: [] })
 
-    const { data, error } = await supabase
+    const chefsMap = new Map()
+
+    const addChef = (chef, menu) => {
+      if (!chef || chef.status === 'closed' || !chef.is_verified) return
+      if (!chefsMap.has(chef.id)) {
+        chefsMap.set(chef.id, { ...chef, menu: menu || [] })
+      }
+    }
+
+    // ١. مطابقة اسم المتجر (في جدول users) — نجلب المتاجر التابعة للمستخدمين المطابقين
+    const { data: matchedUsers } = await supabase
+      .from('users')
+      .select('id')
+      .ilike('full_name', `%${q}%`)
+
+    const matchedUserIds = (matchedUsers || []).map(u => u.id)
+
+    // ٢. مطابقة المدينة أو الحي أو اسم المتجر
+    let chefQuery = supabase
+      .from('chefs')
+      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items ( id, name, price, image_url, category, status )`)
+      .neq('status', 'closed')
+      .eq('is_verified', true)
+
+    const orParts = [`city.ilike.%${q}%`, `neighborhood.ilike.%${q}%`]
+    if (matchedUserIds.length > 0) {
+      orParts.push(`user_id.in.(${matchedUserIds.join(',')})`)
+    }
+
+    const { data: chefsByInfo } = await chefQuery.or(orParts.join(','))
+
+    ;(chefsByInfo || []).forEach(chef => {
+      const menu = (chef.menu || []).filter(m => m.status !== 'unavailable')
+      addChef(chef, menu)
+    })
+
+    // ٣. مطابقة أسماء المنتجات
+    const { data: matchedItems, error: itemsErr } = await supabase
       .from('menu_items')
       .select(`*, chefs (*, users ( full_name, avatar_url, phone ))`)
       .ilike('name', `%${q}%`)
       .neq('status', 'unavailable')
 
-    if (error) throw error
+    if (itemsErr) throw itemsErr
 
-    // نجمع الشيفات ونرفق مع كل واحدة الأصناف المطابقة تحت المفتاح menu
-    // (الواجهة تعتمد على chef.menu للفلترة بالتصنيف وعرض الصورة)
-    const chefsMap = new Map()
-
-    data.forEach(item => {
+    ;(matchedItems || []).forEach(item => {
       const chef = item.chefs
       if (!chef || chef.status === 'closed' || !chef.is_verified) return
 
+      const { chefs, ...menuItem } = item
+
       if (!chefsMap.has(chef.id)) {
-        chefsMap.set(chef.id, { ...chef, menu: [] })
+        chefsMap.set(chef.id, { ...chef, menu: [menuItem] })
+        return
       }
 
-      const { chefs, ...menuItem } = item
-      chefsMap.get(chef.id).menu.push(menuItem)
+      // المتجر موجود من مطابقة سابقة — نضيف المنتج إن لم يكن مضافاً
+      const existing = chefsMap.get(chef.id)
+      if (!existing.menu.some(m => m.id === menuItem.id)) {
+        existing.menu.push(menuItem)
+      }
     })
 
     res.json({ success: true, data: Array.from(chefsMap.values()) })
@@ -41,7 +82,7 @@ router.get('/search', async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  GET /chefs — كل الطباخات المتاحة
+//  GET /chefs — كل المتاجر المتاحة
 //  status: open | preorder | closed
 //  ملاحظة: menu_items تُرجع دائماً باسم menu — الواجهة تفلتر التصنيفات عليها
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -61,7 +102,7 @@ router.get('/', async (req, res) => {
       // فلترة صريحة لحالة معينة (open أو preorder أو closed)
       query = query.eq('status', status)
     } else if (!user_id) {
-      // افتراضياً للعميل: نخفي الشيفات المغلقة تماماً
+      // افتراضياً للعميل: نخفي المتاجر المغلقة تماماً
       query = query.neq('status', 'closed')
     }
 
@@ -97,13 +138,13 @@ router.get('/cert-grace', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data: { grace_days: parseInt(data.value, 10) || 30 } })
   } catch (err) {
-    // في أسوأ الحالات نرجع 30 يوم كافتراض آمن بدل كسر لوحة الشيف
+    // في أسوأ الحالات نرجع 30 يوم كافتراض آمن بدل كسر لوحة المتجر
     res.json({ success: true, data: { grace_days: 30 } })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  GET /chefs/:id — طباخة معينة + قائمتها
+//  GET /chefs/:id — متجر معيّن + قائمته
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/:id', async (req, res) => {
   try {
@@ -131,7 +172,7 @@ router.get('/:id', async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  PATCH /chefs/:id/toggle — تحديث حالة الطباخة
+//  PATCH /chefs/:id/toggle — تحديث حالة المتجر
 //  body: { status: 'open' | 'preorder' | 'closed' }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/toggle', async (req, res) => {
@@ -151,8 +192,8 @@ router.patch('/:id/toggle', async (req, res) => {
 
     if (error) throw error
 
-    // عند التحويل لـ"حجز مسبق": كل الوجبات المتاحة تتحول تلقائياً لحجز مسبق أيضاً
-    // (الوجبات اللي أصلاً "حجز مسبق" أو "غير متاحة" ما تتأثر — ما فيه تراجع تلقائي عكسي)
+    // عند التحويل لـ"حجز مسبق": كل المنتجات المتاحة تتحول تلقائياً لحجز مسبق أيضاً
+    // (المنتجات اللي أصلاً "حجز مسبق" أو "غير متاحة" ما تتأثر — ما فيه تراجع تلقائي عكسي)
     if (status === 'preorder') {
       await supabase
         .from('menu_items')
@@ -199,7 +240,7 @@ router.patch('/:id/offers', async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  PATCH /chefs/:id/location — تحديث موقع الشيف (خط الطول/العرض)
+//  PATCH /chefs/:id/location — تحديث موقع المتجر (خط الطول/العرض)
 //  body: { lat, lng }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/location', async (req, res) => {
@@ -227,7 +268,7 @@ router.patch('/:id/location', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /chefs/:id/freelance-cert — حفظ شهادة العمل الحر
 //  body: { cert_url }
-//  الحقل غير إلزامي بالتسجيل — يُرفع من لوحة الشيف خلال المهلة
+//  الحقل غير إلزامي بالتسجيل — يُرفع من لوحة المتجر خلال المهلة
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.patch('/:id/freelance-cert', async (req, res) => {
   try {
