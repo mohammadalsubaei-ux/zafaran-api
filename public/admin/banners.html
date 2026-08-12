@@ -39,7 +39,7 @@
       <input type="text" id="b-title" placeholder="مثال: خصم 20% على الحلا" />
 
       <label>الوصف (اختياري)</label>
-      <input type="text" id="b-subtitle" placeholder="مثال: هذا الويكند فقط من شيفات القصيم" />
+      <input type="text" id="b-subtitle" placeholder="مثال: هذا الويكند فقط من متاجر القصيم" />
 
       <div style="display:flex;gap:14px;flex-wrap:wrap">
         <div>
@@ -57,11 +57,15 @@
       </div>
 
       <label>الوجهة عند الضغط</label>
+      <!-- المسارات هنا يجب أن تطابق مسارات expo-router في التطبيق حرفياً -->
+      <!-- أي مسار غير موجود = ضغطة بلا استجابة -->
       <select id="b-target" style="width:100%;padding:10px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;font-size:14px;margin-bottom:12px">
         <option value="">بدون وجهة</option>
-        <option value="/sweets">قسم الحلويات</option>
-        <option value="/pastries">قسم المعجنات</option>
-        <option value="/categories">التصنيفات</option>
+        <option value="/(tabs)/categories?category=all">كل التصنيفات</option>
+        <option value="/(tabs)/categories?category=popular">قسم الطبخ</option>
+        <option value="/(tabs)/categories?category=sweets">قسم الحلا</option>
+        <option value="/(tabs)/categories?category=pastries">قسم المعجنات</option>
+        <option value="/(tabs)/categories?category=drinks">قسم القهوة</option>
       </select>
 
       <div style="font-size:12px;opacity:.65;margin-bottom:6px">معاينة حية:</div>
@@ -79,7 +83,27 @@
 
   <script src="admin.js"></script>
   <script>
-    const TARGET_AR = { "/sweets": "قسم الحلويات", "/pastries": "قسم المعجنات", "/categories": "التصنيفات" };
+    const TARGET_AR = {
+      "/(tabs)/categories?category=all":      "كل التصنيفات",
+      "/(tabs)/categories?category=popular":  "قسم الطبخ",
+      "/(tabs)/categories?category=sweets":   "قسم الحلا",
+      "/(tabs)/categories?category=pastries": "قسم المعجنات",
+      "/(tabs)/categories?category=drinks":   "قسم القهوة",
+      // مسارات قديمة غير صالحة — تُعرض بتنبيه حتى يصححها الأدمن
+      "/sweets":    "قسم الحلويات (مسار قديم غير صالح)",
+      "/pastries":  "قسم المعجنات (مسار قديم غير صالح)",
+      "/categories": "التصنيفات (مسار قديم غير صالح)",
+    };
+
+    // المسارات الصالحة فقط — أي غيرها يُعرض كتحذير
+    const VALID_TARGETS = [
+      "/(tabs)/categories?category=all",
+      "/(tabs)/categories?category=popular",
+      "/(tabs)/categories?category=sweets",
+      "/(tabs)/categories?category=pastries",
+      "/(tabs)/categories?category=drinks",
+    ];
+
     let editingId = null;
 
     (async () => {
@@ -111,7 +135,10 @@
       }
 
       container.className = "";
-      container.innerHTML = json.data.map((b) => `
+      container.innerHTML = json.data.map((b) => {
+        const brokenTarget = b.target && !VALID_TARGETS.includes(b.target);
+
+        return `
         <div class="stat-card" style="display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px">
           <div style="flex:1;min-width:240px;border-radius:14px;padding:14px;border:1px solid rgba(242,178,51,.15);background:${b.bg_color};color:${b.text_color}">
             <div style="font-weight:800;font-size:15px;text-align:right">${escapeHtml(b.title)}</div>
@@ -121,6 +148,7 @@
             <span>${b.is_active ? '<span class="badge badge-green">معروض</span>' : '<span class="badge badge-red">موقوف</span>'}
               <span style="opacity:.6;margin-inline-start:8px">ترتيب: ${b.sort_order}</span></span>
             <span style="opacity:.6">${b.target ? "الوجهة: " + (TARGET_AR[b.target] || escapeHtml(b.target)) : "بدون وجهة"}</span>
+            ${brokenTarget ? '<span style="color:#E57373;font-size:11px">الوجهة لا تعمل — عدّلها واختر وجهة من القائمة</span>' : ""}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn-ghost" onclick='toggleBanner("${b.id}", ${b.is_active ? "false" : "true"})'>${b.is_active ? "إيقاف" : "تفعيل"}</button>
@@ -128,7 +156,8 @@
             <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick='deleteBanner("${b.id}")'>حذف</button>
           </div>
         </div>
-      `).join("");
+      `;
+      }).join("");
     }
 
     function updatePreview() {
@@ -152,7 +181,11 @@
       document.getElementById("b-bg").value = banner ? banner.bg_color : "#3E2410";
       document.getElementById("b-text").value = banner ? banner.text_color : "#FDF0DC";
       document.getElementById("b-order").value = banner ? banner.sort_order : 0;
-      document.getElementById("b-target").value = banner && banner.target ? banner.target : "";
+
+      // المسار القديم غير الصالح لا يوجد في القائمة — نتركه فارغاً ليختار الأدمن وجهة صحيحة
+      const target = banner && banner.target ? banner.target : "";
+      document.getElementById("b-target").value = VALID_TARGETS.includes(target) ? target : "";
+
       updatePreview();
       document.getElementById("banner-modal").classList.add("open");
     }
