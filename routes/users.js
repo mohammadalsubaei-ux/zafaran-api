@@ -41,9 +41,9 @@ router.post('/register', async (req, res) => {
         neighborhood: req.body.neighborhood || ''
       })
       if (chefErr) {
-        // لا نترك مستخدما يتيما بدون ملف شيف — نحذفه ونرجع الخطأ الحقيقي
+        // لا نترك مستخدما يتيما بدون ملف متجر — نحذفه ونرجع الخطأ الحقيقي
         await supabase.from('users').delete().eq('id', data.id)
-        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف الشيف: ' + chefErr.message })
+        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف المتجر: ' + chefErr.message })
       }
     }
 
@@ -101,6 +101,75 @@ router.post('/login', async (req, res) => {
 
     delete data.password_hash
     delete data.password_salt
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /users/:id — بيانات المستخدم (بدون أي حقول حساسة)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, phone, full_name, role, gender, avatar_url, is_active, created_at')
+      .eq('id', req.params.id)
+      .single()
+
+    if (error) throw error
+    if (!data) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /users/:id/profile — تحديث الصورة الشخصية والاسم
+//  body: { avatar_url?, full_name? }
+//  الحقول المسموحة محصورة عمداً — الدور والحالة والجوال لا تُعدّل من التطبيق
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/profile', async (req, res) => {
+  try {
+    const { avatar_url, full_name } = req.body
+    const updates = {}
+
+    if (avatar_url !== undefined) {
+      // null يعني حذف الصورة — أي قيمة أخرى يجب أن تكون رابطاً آمناً
+      if (avatar_url === null || avatar_url === '') {
+        updates.avatar_url = null
+      } else if (typeof avatar_url === 'string' && avatar_url.startsWith('https://')) {
+        updates.avatar_url = avatar_url
+      } else {
+        return res.status(400).json({ success: false, message: 'رابط الصورة غير صالح' })
+      }
+    }
+
+    if (full_name !== undefined) {
+      const clean = String(full_name).trim()
+      if (clean.length < 2) {
+        return res.status(400).json({ success: false, message: 'الاسم قصير جداً' })
+      }
+      updates.full_name = clean
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, message: 'ما فيه أي حقل للتحديث' })
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select('id, phone, full_name, role, gender, avatar_url, is_active')
+      .single()
+
+    if (error) throw error
+    if (!data) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
