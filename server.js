@@ -9,6 +9,7 @@ app.use(cors())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 app.use('/admin', express.static(path.join(__dirname, 'public/admin')))
+app.use('/legal', express.static(path.join(__dirname, 'public/legal')))
 
 // ── Routes ──
 app.use('/api/users',     require('./routes/users'))
