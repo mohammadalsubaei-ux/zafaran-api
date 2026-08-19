@@ -88,6 +88,10 @@ router.post('/login', async (req, res) => {
     if (error || !data)
       return res.status(404).json({ success: false, message: 'رقم الجوال غير مسجل' })
 
+    // الحساب المحذوف: رسالة صريحة تفرقه عن الموقوف إدارياً
+    if (data.deleted_at)
+      return res.status(403).json({ success: false, message: 'هذا الحساب محذوف — يمكنك إنشاء حساب جديد' })
+
     // الحساب الموقوف من الإدارة: رسالة صريحة بدل "غير مسجل" المضللة
     if (data.is_active === false)
       return res.status(403).json({ success: false, message: 'حسابك موقوف — للاستفسار تواصل مع دعم زعفران' })
@@ -171,6 +175,205 @@ router.patch('/:id/profile', async (req, res) => {
     if (!data) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
 
     res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /users/:id/deletion-check — فحص الموانع قبل عرض شاشة الحذف
+//  يرجع أسباب المنع ليعرفها المستخدم مسبقاً بدل مفاجأته بالرفض
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const ACTIVE_ORDER_STATUSES = ['pending', 'pending_time', 'accepted', 'preparing', 'ready', 'delivering']
+
+router.get('/:id/deletion-check', async (req, res) => {
+  try {
+    const userId = req.params.id
+    const blockers = []
+
+    const { data: user } = await supabase
+      .from('users').select('id, role, deleted_at').eq('id', userId).single()
+
+    if (!user) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+    if (user.deleted_at) return res.status(409).json({ success: false, message: 'الحساب محذوف مسبقاً' })
+
+    // ١. طلبات جارية كعميل
+    const { data: customerOrders } = await supabase
+      .from('orders').select('id').eq('customer_id', userId).in('status', ACTIVE_ORDER_STATUSES)
+
+    if (customerOrders && customerOrders.length > 0) {
+      blockers.push({
+        code: 'active_orders',
+        message: 'عندك ' + customerOrders.length + ' طلب جاري — انتظر اكتماله أو ألغه قبل حذف الحساب'
+      })
+    }
+
+    // ٢. طلبات جارية عند المتجر
+    if (user.role === 'chef') {
+      const { data: chef } = await supabase
+        .from('chefs').select('id').eq('user_id', userId).maybeSingle()
+
+      if (chef) {
+        const { data: chefOrders } = await supabase
+          .from('orders').select('id').eq('chef_id', chef.id).in('status', ACTIVE_ORDER_STATUSES)
+
+        if (chefOrders && chefOrders.length > 0) {
+          blockers.push({
+            code: 'chef_active_orders',
+            message: 'عند متجرك ' + chefOrders.length + ' طلب جاري — أكمله قبل حذف الحساب'
+          })
+        }
+      }
+    }
+
+    // ٣. رصيد متبقٍ في المحفظة
+    const { data: wallet } = await supabase
+      .from('wallets').select('balance, available_balance, pending_balance')
+      .eq('user_id', userId).maybeSingle()
+
+    if (wallet) {
+      const total = Number(wallet.balance || 0)
+        + Number(wallet.available_balance || 0)
+        + Number(wallet.pending_balance || 0)
+
+      if (total > 0) {
+        blockers.push({
+          code: 'wallet_balance',
+          message: 'عندك رصيد ' + total.toFixed(2) + ' ريال — اسحبه قبل حذف الحساب حتى لا تفقده'
+        })
+      }
+    }
+
+    // ٤. طلبات توصيل جارية كمندوب
+    if (user.role === 'driver') {
+      const { data: driverOrders } = await supabase
+        .from('orders').select('id').eq('driver_id', userId).in('status', ACTIVE_ORDER_STATUSES)
+
+      if (driverOrders && driverOrders.length > 0) {
+        blockers.push({
+          code: 'driver_active_orders',
+          message: 'عندك ' + driverOrders.length + ' طلب توصيل جاري — سلّمه قبل حذف الحساب'
+        })
+      }
+    }
+
+    // ٥. طلبات سحب قيد المراجعة
+    const { data: withdrawals } = await supabase
+      .from('withdrawals').select('id').eq('user_id', userId).eq('status', 'pending')
+
+    if (withdrawals && withdrawals.length > 0) {
+      blockers.push({
+        code: 'pending_withdrawal',
+        message: 'عندك طلب سحب قيد المراجعة — انتظر تحويله قبل حذف الحساب'
+      })
+    }
+
+    res.json({ success: true, data: { can_delete: blockers.length === 0, blockers } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /users/:id/delete — حذف الحساب (متطلب إلزامي لمتجر آبل)
+//  body: { password }
+//
+//  حذف ناعم لا نهائي عمداً:
+//  السجل المالي (الطلبات والقيود المحاسبية) يبقى سليماً لأنه التزام
+//  محاسبي، بينما تُطمس البيانات الشخصية ويُقفل الدخول تماماً.
+//  الجوال يُستبدل بقيمة فريدة حتى يبقى القيد الفريد سليماً ويستطيع
+//  المستخدم التسجيل من جديد بنفس رقمه لو أراد.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/:id/delete', async (req, res) => {
+  try {
+    const userId = req.params.id
+    const { password } = req.body
+
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'اكتب كلمة المرور لتأكيد الحذف' })
+    }
+
+    const { data: user } = await supabase
+      .from('users').select('*').eq('id', userId).single()
+
+    if (!user) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
+    if (user.deleted_at) return res.status(409).json({ success: false, message: 'الحساب محذوف مسبقاً' })
+
+    // تحقق الهوية — بدونه يستطيع أي أحد حذف أي حساب بمعرفة معرّفه
+    if (!user.password_hash || !user.password_salt) {
+      return res.status(409).json({ success: false, message: 'حسابك يحتاج تعيين كلمة مرور — تواصل مع دعم زعفران' })
+    }
+    if (hashPassword(String(password), user.password_salt) !== user.password_hash) {
+      return res.status(401).json({ success: false, message: 'كلمة المرور غير صحيحة' })
+    }
+
+    // إعادة فحص الموانع خادمياً — لا نثق بفحص الواجهة وحده
+    const { data: activeOrders } = await supabase
+      .from('orders').select('id').eq('customer_id', userId).in('status', ACTIVE_ORDER_STATUSES)
+
+    if (activeOrders && activeOrders.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'عندك طلبات جارية — انتظر اكتمالها أو ألغها قبل حذف الحساب'
+      })
+    }
+
+    const { data: wallet } = await supabase
+      .from('wallets').select('balance, available_balance, pending_balance')
+      .eq('user_id', userId).maybeSingle()
+
+    if (wallet) {
+      const total = Number(wallet.balance || 0)
+        + Number(wallet.available_balance || 0)
+        + Number(wallet.pending_balance || 0)
+
+      if (total > 0) {
+        return res.status(409).json({
+          success: false,
+          message: 'عندك رصيد ' + total.toFixed(2) + ' ريال — اسحبه قبل حذف الحساب'
+        })
+      }
+    }
+
+    const stamp = Date.now()
+
+    // طمس البيانات الشخصية مع إبقاء الصف لسلامة المفاتيح الأجنبية
+    const { error: userErr } = await supabase
+      .from('users')
+      .update({
+        full_name:  'حساب محذوف',
+        phone:      'deleted_' + stamp,
+        avatar_url: null,
+        is_active:  false,
+        deleted_at: new Date().toISOString(),
+        password_hash: null,
+        password_salt: null
+      })
+      .eq('id', userId)
+
+    if (userErr) throw userErr
+
+    // إخفاء المتجر من التطبيق فوراً
+    if (user.role === 'chef') {
+      await supabase.from('chefs')
+        .update({ status: 'closed', is_open: false, is_verified: false })
+        .eq('user_id', userId)
+    }
+
+    // إيقاف المندوب عن استقبال الطلبات
+    if (user.role === 'driver') {
+      await supabase.from('drivers')
+        .update({ is_available: false, is_verified: false })
+        .eq('user_id', userId)
+    }
+
+    // حذف رموز الإشعارات حتى لا تصله إشعارات بعد الحذف
+    await supabase.from('push_tokens').delete().eq('user_id', userId)
+
+    // حذف العناوين المحفوظة — بيانات شخصية بحتة بلا قيمة محاسبية
+    await supabase.from('addresses').delete().eq('user_id', userId)
+
+    res.json({ success: true, message: 'تم حذف حسابك' })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }
