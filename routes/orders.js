@@ -372,6 +372,7 @@ router.patch('/:id/status', async (req, res) => {
       }
       const updated = await applyStatusChange(order, 'cancelled', {
         cancel_reason: cancel_reason && cancel_reason.trim() ? cancel_reason.trim() : 'ألغاه العميل',
+        cancelled_by: 'customer',
         notifyChef: true
       })
       return res.json({ success: true, data: updated })
@@ -389,7 +390,7 @@ router.patch('/:id/status', async (req, res) => {
       }
     }
 
-    const updated = await applyStatusChange(order, status, { cancel_reason })
+    const updated = await applyStatusChange(order, status, { cancel_reason, cancelled_by: 'chef' })
     res.json({ success: true, data: updated })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })

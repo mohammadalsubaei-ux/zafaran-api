@@ -53,7 +53,12 @@ async function applyStatusChange(order, status, opts = {}) {
   if (status === 'accepted')  updates.accepted_at  = new Date()
   if (status === 'ready')     updates.ready_at     = new Date()
   if (status === 'delivered') updates.delivered_at = new Date()
-  if (status === 'cancelled' && opts.cancel_reason) updates.cancel_reason = opts.cancel_reason
+  if (status === 'cancelled') {
+    // العمود الأصلي بالقاعدة هو cancellation_reason — ونعبّي وقت الإلغاء ومن ألغاه لسجل الأدمن
+    if (opts.cancel_reason) updates.cancellation_reason = opts.cancel_reason
+    if (opts.cancelled_by)  updates.cancelled_by        = opts.cancelled_by
+    updates.cancelled_at = new Date()
+  }
 
   const { data: updated, error } = await supabase
     .from('orders')

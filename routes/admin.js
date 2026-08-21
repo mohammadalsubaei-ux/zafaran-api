@@ -411,6 +411,7 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
 
     const updated = await applyStatusChange(order, status, {
       cancel_reason: cancel_reason ? cancel_reason.trim() : undefined,
+      cancelled_by: 'admin',
       notifyChef: status === 'cancelled'
     })
     res.json({ success: true, data: updated })
