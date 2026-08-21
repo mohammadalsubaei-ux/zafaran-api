@@ -335,14 +335,16 @@ router.post('/:id/delete', async (req, res) => {
       }
     }
 
-    const stamp = Date.now()
+    // عمود users.phone نوعه varchar(15) — 'deleted_' + Date.now() يعطي 21 حرفاً فيرفضه بوستجرس.
+    // نستخدم DEL + آخر 12 رقماً من الطابع الزمني بالمللي ثانية = 15 حرفاً بالضبط، ويبقى فريداً.
+    const stamp = String(Date.now()).slice(-12)
 
     // طمس البيانات الشخصية مع إبقاء الصف لسلامة المفاتيح الأجنبية
     const { error: userErr } = await supabase
       .from('users')
       .update({
         full_name:  'حساب محذوف',
-        phone:      'deleted_' + stamp,
+        phone:      'DEL' + stamp,
         avatar_url: null,
         is_active:  false,
         deleted_at: new Date().toISOString(),
