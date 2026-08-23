@@ -13,6 +13,10 @@ const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
+const APP_SCHEME  = 'zafaranapp'
+const IOS_URL     = 'https://apps.apple.com/sa/app/id6803207860'
+const ANDROID_URL = 'https://play.google.com/store/apps/details?id=com.zafaran.app'
+
 const STATUS_LABEL = {
   open:     { text: 'مفتوح الآن — يستقبل طلبات فورية', color: '#4CAF50' },
   preorder: { text: 'حجز مسبق فقط',                    color: '#F0A500' },
@@ -74,7 +78,14 @@ router.get('/:id', async (req, res) => {
       <div class="menu">${menuHtml}</div>
       <div class="cta">
         <div class="cta-title">اطلب من ${name} عبر تطبيق زعفران</div>
-        <div class="cta-sub">منصة الطلب من المتاجر المنزلية — أكل، حلا، معجنات وقهوة</div>
+        <div class="cta-sub">منصة الطلب من المتاجر المنزلية — طبخ، حلا، معجنات، قهوة ومؤن</div>
+
+        <a class="btn btn-gold" href="${APP_SCHEME}://chef/${esc(chef.id)}" id="openApp">افتح في التطبيق</a>
+
+        <div class="store-links">
+          <a class="btn btn-line" href="${IOS_URL}">آيفون — App Store</a>
+          <a class="btn btn-line" href="${ANDROID_URL}">أندرويد — Google Play</a>
+        </div>
       </div>`
 
     res.send(pageShell(`${name} | زعفران`, body, {
@@ -127,10 +138,54 @@ ${og.image ? `<meta property="og:image" content="${esc(og.image)}">` : ''}
   .cta { text-align:center; background:var(--card); border:1px solid var(--gold); border-radius:14px; padding:20px 16px; margin-top:24px; }
   .cta-title { color:var(--gold); font-weight:700; font-size:16px; }
   .cta-sub { color:var(--muted); font-size:13px; margin-top:6px; }
+  .btn { display:block; text-decoration:none; border-radius:12px; padding:13px 18px; font-size:15px; font-weight:700; margin-top:14px; }
+  .btn-gold { background:var(--gold); color:#161006; }
+  .btn-line { border:1px solid var(--line); color:var(--text); font-weight:400; font-size:14px; padding:11px 14px; }
+  .store-links { display:flex; gap:10px; margin-top:4px; }
+  .store-links .btn { flex:1; margin-top:10px; text-align:center; }
   .empty { text-align:center; color:var(--muted); padding:32px 0; }
 </style>
 </head>
-<body><div class="wrap">${body}</div></body>
+<body><div class="wrap">${body}</div>
+<script>
+var IOS_FALLBACK = "${IOS_URL}";
+var ANDROID_FALLBACK = "${ANDROID_URL}";
+(function () {
+  // إبراز متجر التطبيقات المناسب لجهاز الزائر فقط — بلا تحويل قسري
+  var ua = navigator.userAgent || "";
+  var isIOS = /iPad|iPhone|iPod/.test(ua);
+  var isAndroid = /Android/.test(ua);
+  var links = document.querySelectorAll(".store-links .btn");
+
+  if (links.length === 2) {
+    if (isIOS)     { links[1].style.display = "none"; }
+    if (isAndroid) { links[0].style.display = "none"; }
+  }
+
+  // زر "افتح في التطبيق": إن لم يُفتح خلال ثانية ونصف نوجّه للمتجر المناسب
+  var openBtn = document.getElementById("openApp");
+  if (!openBtn) return;
+
+  openBtn.addEventListener("click", function (e) {
+    if (!isIOS && !isAndroid) return;
+    e.preventDefault();
+
+    var fallback = isIOS ? IOS_FALLBACK : ANDROID_FALLBACK;
+    var left = false;
+
+    function onHide() { if (document.hidden) left = true; }
+    document.addEventListener("visibilitychange", onHide);
+
+    window.location.href = openBtn.getAttribute("href");
+
+    setTimeout(function () {
+      document.removeEventListener("visibilitychange", onHide);
+      if (!left) window.location.href = fallback;
+    }, 1500);
+  });
+})();
+</script>
+</body>
 </html>`
 }
 
