@@ -696,29 +696,44 @@ router.post('/:id/review', async (req, res) => {
       return res.status(403).json({ success: false, message: 'غير مصرح' })
     }
 
+    // التقييم المكرر يُحدَّث ولا يُرفض — العميل يعدّل رأيه بدل أن يواجه خطأ
     const { data: existingReview } = await supabase
       .from('reviews')
       .select('id')
       .eq('order_id', order_id)
       .maybeSingle()
 
+    let review = null
+
     if (existingReview) {
-      return res.status(409).json({ success: false, message: 'تم تقييم هذا الطلب مسبقاً' })
+      const { data: updated, error: updateErr } = await supabase
+        .from('reviews')
+        .update({
+          rating: numericRating,
+          comment: comment ? String(comment).trim() : null
+        })
+        .eq('id', existingReview.id)
+        .select()
+        .single()
+
+      if (updateErr) throw updateErr
+      review = updated
+    } else {
+      const { data: created, error: reviewErr } = await supabase
+        .from('reviews')
+        .insert({
+          order_id,
+          customer_id,
+          chef_id: order.chef_id,
+          rating: numericRating,
+          comment: comment ? String(comment).trim() : null
+        })
+        .select()
+        .single()
+
+      if (reviewErr) throw reviewErr
+      review = created
     }
-
-    const { data: review, error: reviewErr } = await supabase
-      .from('reviews')
-      .insert({
-        order_id,
-        customer_id,
-        chef_id: order.chef_id,
-        rating: numericRating,
-        comment: comment ? String(comment).trim() : null
-      })
-      .select()
-      .single()
-
-    if (reviewErr) throw reviewErr
 
     const { data: allReviews } = await supabase
       .from('reviews')
@@ -736,7 +751,31 @@ router.post('/:id/review', async (req, res) => {
         .eq('id', order.chef_id)
     }
 
-    res.status(201).json({ success: true, data: review })
+    res.status(existingReview ? 200 : 201).json({
+      success: true,
+      data: review,
+      updated: Boolean(existingReview)
+    })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /orders/:id/review
+//  يُرجع تقييم الطلب إن وُجد — لتعرضه الشاشة بدل نموذج فارغ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/:id/review', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('reviews')
+      .select('id, rating, comment, created_at')
+      .eq('order_id', req.params.id)
+      .maybeSingle()
+
+    if (error) throw error
+
+    res.json({ success: true, data: data || null })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }
