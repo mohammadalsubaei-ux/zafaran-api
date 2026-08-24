@@ -32,7 +32,7 @@ router.get('/search', async (req, res) => {
     // ٢. مطابقة المدينة أو الحي أو اسم المتجر
     let chefQuery = supabase
       .from('chefs')
-      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items ( id, name, price, image_url, category, status )`)
+      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items!menu_items_chef_id_fkey ( id, name, price, image_url, category, status )`)
       .neq('status', 'closed')
       .eq('is_verified', true)
 
@@ -92,7 +92,7 @@ router.get('/', async (req, res) => {
 
     let query = supabase
       .from('chefs')
-      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items ( id, name, price, image_url, category, status )`)
+      .select(`*, users ( full_name, avatar_url, phone ), menu:menu_items!menu_items_chef_id_fkey ( id, name, price, image_url, category, status )`)
 
     if (!user_id) query = query.eq('is_verified', true)
     if (city)    query = query.eq('city', city)
