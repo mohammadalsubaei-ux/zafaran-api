@@ -110,11 +110,41 @@ router.get('/', async (req, res) => {
 
     if (error) throw error
 
-    // الأصناف غير المتوفرة لا تُحتسب في التصنيفات ولا تُعرض
-    const clean = (data || []).map(chef => ({
-      ...chef,
-      menu: (chef.menu || []).filter(item => item.status !== 'unavailable')
-    }))
+    // البث ينتهي تلقائياً بعد 4 ساعات — حتى لا تبقى الشارة مضاءة لمن نسي إطفاءها
+    const LIVE_MAX_MS = 4 * 60 * 60 * 1000
+    const now = Date.now()
+    const expiredLive = []
+
+    const clean = (data || []).map(chef => {
+      let live = Boolean(chef.is_live)
+
+      if (live) {
+        const started = chef.live_started_at ? new Date(chef.live_started_at).getTime() : 0
+        if (!started || now - started > LIVE_MAX_MS) {
+          live = false
+          expiredLive.push(chef.id)
+        }
+      }
+
+      return {
+        ...chef,
+        is_live: live,
+        live_url: live ? chef.live_url : null,
+        live_item_id: live ? chef.live_item_id : null,
+        live_item_price: live ? chef.live_item_price : null,
+        // الأصناف غير المتوفرة لا تُحتسب في التصنيفات ولا تُعرض
+        menu: (chef.menu || []).filter(item => item.status !== 'unavailable')
+      }
+    })
+
+    // تنظيف صامت بالقاعدة — لا يعطل الرد إن فشل
+    if (expiredLive.length > 0) {
+      supabase
+        .from('chefs')
+        .update({ is_live: false, live_url: null, live_started_at: null, live_item_id: null, live_item_price: null })
+        .in('id', expiredLive)
+        .then(() => {}, () => {})
+    }
 
     res.json({ success: true, data: clean })
   } catch (err) {
@@ -223,6 +253,106 @@ router.patch('/:id/offers', async (req, res) => {
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ success: false, message: 'ما فيه أي حقل صالح للتحديث' })
+    }
+
+    const { data, error } = await supabase
+      .from('chefs')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /chefs/:id/live — تشغيل/إيقاف البث المباشر
+//  body: { is_live, live_url?, live_item_id?, live_item_price? }
+//
+//  لا بث داخل التطبيق — نربط بث المتجر الموجود على تيك توك أو غيره.
+//  إيقاف تلقائي بعد 4 ساعات يجري عند القراءة (انظر GET /chefs).
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/live', async (req, res) => {
+  try {
+    const { is_live, live_url, live_item_id, live_item_price } = req.body
+
+    if (typeof is_live !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'الحقل is_live مطلوب (true/false)' })
+    }
+
+    if (!is_live) {
+      const { data, error } = await supabase
+        .from('chefs')
+        .update({
+          is_live: false,
+          live_url: null,
+          live_started_at: null,
+          live_item_id: null,
+          live_item_price: null
+        })
+        .eq('id', req.params.id)
+        .select()
+        .single()
+
+      if (error) throw error
+      return res.json({ success: true, data })
+    }
+
+    const url = String(live_url || '').trim()
+    if (!url) {
+      return res.status(400).json({ success: false, message: 'رابط البث مطلوب' })
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      return res.status(400).json({ success: false, message: 'رابط البث يجب أن يبدأ بـ https' })
+    }
+
+    // المتجر يجب أن يكون مفتوحاً — لا معنى لبث من متجر مغلق
+    const { data: chef, error: chefErr } = await supabase
+      .from('chefs')
+      .select('id, status')
+      .eq('id', req.params.id)
+      .single()
+
+    if (chefErr) throw chefErr
+    if (chef.status === 'closed') {
+      return res.status(400).json({ success: false, message: 'افتح متجرك أولاً قبل بدء البث' })
+    }
+
+    const updates = {
+      is_live: true,
+      live_url: url,
+      live_started_at: new Date(),
+      live_item_id: null,
+      live_item_price: null
+    }
+
+    // منتج البث بسعر خاص — اختياري
+    if (live_item_id) {
+      const price = Number(live_item_price)
+      if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ success: false, message: 'سعر منتج البث غير صحيح' })
+      }
+
+      const { data: item, error: itemErr } = await supabase
+        .from('menu_items')
+        .select('id, price, chef_id')
+        .eq('id', live_item_id)
+        .single()
+
+      if (itemErr || !item || item.chef_id !== req.params.id) {
+        return res.status(400).json({ success: false, message: 'المنتج غير موجود في متجرك' })
+      }
+
+      if (price >= Number(item.price)) {
+        return res.status(400).json({ success: false, message: 'سعر البث يجب أن يكون أقل من السعر الأصلي' })
+      }
+
+      updates.live_item_id = live_item_id
+      updates.live_item_price = price
     }
 
     const { data, error } = await supabase
