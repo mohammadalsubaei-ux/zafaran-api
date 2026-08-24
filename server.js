@@ -8,6 +8,48 @@ const path    = require('path')
 app.use(cors())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  الروابط العميقة — ملفا التحقق
+//  بدونهما لا يفتح رابط /store/:id التطبيق، بل المتصفح فقط.
+//  شرط آبل: يُقدَّم بترويسة application/json وبلا أي تحويل.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const IOS_TEAM_ID   = process.env.IOS_TEAM_ID   || '9994A969J9'
+const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID || 'com.zafaran.app'
+const ANDROID_PKG   = process.env.ANDROID_PKG   || 'com.zafaran.app'
+// بصمة توقيع أندرويد (SHA-256) — تُؤخذ من: eas credentials
+const ANDROID_SHA256 = process.env.ANDROID_SHA256 || ''
+
+app.get('/.well-known/apple-app-site-association', (req, res) => {
+  res.type('application/json').json({
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appID: `${IOS_TEAM_ID}.${IOS_BUNDLE_ID}`,
+          paths: ['/store/*']
+        }
+      ]
+    }
+  })
+})
+
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  if (!ANDROID_SHA256) {
+    return res.type('application/json').json([])
+  }
+
+  res.type('application/json').json([
+    {
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: ANDROID_PKG,
+        sha256_cert_fingerprints: [ANDROID_SHA256]
+      }
+    }
+  ])
+})
+
 app.use('/admin', express.static(path.join(__dirname, 'public/admin')))
 app.use('/legal', express.static(path.join(__dirname, 'public/legal')))
 
