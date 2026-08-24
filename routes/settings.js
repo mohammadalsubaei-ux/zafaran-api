@@ -10,7 +10,8 @@ const supabase = require('../supabase')
 
 // الإعدادات المسموح قراءتها علناً — أضف هنا فقط ما يحتاجه التطبيق للعرض
 const PUBLIC_KEYS = [
-  'latest_version_code',   // رقم أحدث إصدار — لرسالة التحديث
+  'latest_version',        // أحدث نسخة منشورة (1.0.2) — المصدر المعتمد لرسالة التحديث
+  'latest_version_code',   // مهجور: versionCode مجمّد في app.json ولا يعكس نسخة EAS
   'update_required',       // هل التحديث إجباري (اختياري مستقبلاً)
 ]
 
