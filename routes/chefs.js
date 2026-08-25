@@ -110,6 +110,29 @@ router.get('/', async (req, res) => {
 
     if (error) throw error
 
+    // العروض النشطة لكل متجر — لعرض شارة الخصم والسعر المشطوب
+    const chefIds = (data || []).map(ch => ch.id)
+    let offersByChef = {}
+
+    if (chefIds.length > 0) {
+      const { data: offers } = await supabase
+        .from('offers')
+        .select('id, chef_id, menu_item_id, title, discount_type, discount_value, max_discount_amount, usage_limit, usage_count, starts_at, ends_at')
+        .in('chef_id', chefIds)
+        .eq('is_active', true)
+
+      const nowDate = new Date()
+
+      ;(offers || []).forEach(o => {
+        if (new Date(o.starts_at) > nowDate) return
+        if (o.ends_at && new Date(o.ends_at) < nowDate) return
+        if (o.usage_limit != null && Number(o.usage_count) >= Number(o.usage_limit)) return
+
+        if (!offersByChef[o.chef_id]) offersByChef[o.chef_id] = []
+        offersByChef[o.chef_id].push(o)
+      })
+    }
+
     // البث ينتهي تلقائياً بعد 4 ساعات — حتى لا تبقى الشارة مضاءة لمن نسي إطفاءها
     const LIVE_MAX_MS = 4 * 60 * 60 * 1000
     const now = Date.now()
@@ -132,6 +155,7 @@ router.get('/', async (req, res) => {
         live_url: live ? chef.live_url : null,
         live_item_id: live ? chef.live_item_id : null,
         live_item_price: live ? chef.live_item_price : null,
+        offers: offersByChef[chef.id] || [],
         // الأصناف غير المتوفرة لا تُحتسب في التصنيفات ولا تُعرض
         menu: (chef.menu || []).filter(item => item.status !== 'unavailable')
       }

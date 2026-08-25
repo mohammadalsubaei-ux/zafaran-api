@@ -103,7 +103,49 @@ router.post('/', async (req, res) => {
 
     if (menuErr) throw menuErr
 
+    // ━━ العروض النشطة ━━
+    // خامل تماماً بلا عروض: الاستعلام يرجع فارغاً فتبقى الأسعار كما هي حرفياً.
+    // العمولة تُحسب على subtotal بعد الخصم — فلا نأخذ عمولة على ريال لم يُحصَّل.
+    const nowIso = new Date().toISOString()
+
+    const { data: activeOffers } = await supabase
+      .from('offers')
+      .select('id, menu_item_id, discount_type, discount_value, max_discount_amount, usage_limit, usage_count, starts_at, ends_at')
+      .eq('chef_id', chef_id)
+      .eq('is_active', true)
+      .lte('starts_at', nowIso)
+
+    const usableOffers = (activeOffers || []).filter(o => {
+      if (o.ends_at && new Date(o.ends_at) < new Date()) return false
+      if (o.usage_limit != null && Number(o.usage_count) >= Number(o.usage_limit)) return false
+      return true
+    })
+
+    // عرض المنتج أولى من عرض المتجر العام
+    const offerFor = (menuItemId) =>
+      usableOffers.find(o => o.menu_item_id === menuItemId) ||
+      usableOffers.find(o => !o.menu_item_id) ||
+      null
+
+    const discountedPrice = (basePrice, offer) => {
+      if (!offer) return basePrice
+
+      let off = offer.discount_type === 'percent'
+        ? basePrice * (Number(offer.discount_value) / 100)
+        : Number(offer.discount_value)
+
+      if (offer.max_discount_amount != null) {
+        off = Math.min(off, Number(offer.max_discount_amount))
+      }
+
+      const final = basePrice - off
+      // لا سعر سالب ولا مجاني بالخطأ
+      return final > 0 ? parseFloat(final.toFixed(2)) : basePrice
+    }
+
     let subtotal = 0
+    let discountTotal = 0
+    let appliedOfferId = null
 
     const orderItems = items.map(item => {
       const menuItem = menuItems.find(m => m.id === item.menu_item_id)
@@ -122,10 +164,18 @@ router.post('/', async (req, res) => {
         throw new Error('"' + menuItem.name + '" متاح بالحجز المسبق فقط — اختر وقتاً للتسليم')
       }
 
-      const quantity = Number(item.quantity || 1)
-      const price = Number(menuItem.price || 0)
-      const lineTotal = price * quantity
+      const quantity  = Number(item.quantity || 1)
+      const basePrice = Number(menuItem.price || 0)
 
+      const offer = offerFor(item.menu_item_id)
+      const price = discountedPrice(basePrice, offer)
+
+      if (offer && price < basePrice) {
+        discountTotal += (basePrice - price) * quantity
+        if (!appliedOfferId) appliedOfferId = offer.id
+      }
+
+      const lineTotal = price * quantity
       subtotal += lineTotal
 
       return {
@@ -136,6 +186,8 @@ router.post('/', async (req, res) => {
         subtotal: lineTotal
       }
     })
+
+    discountTotal = parseFloat(discountTotal.toFixed(2))
 
     const isPickup = delivery_address === 'استلام شخصي'
 
@@ -216,6 +268,8 @@ router.post('/', async (req, res) => {
         total,
         payment_method,
         notes,
+        discount_amount: discountTotal,
+        offer_id: appliedOfferId,
         status: 'pending',
         payment_status: 'pending'
       })
@@ -227,6 +281,18 @@ router.post('/', async (req, res) => {
     const itemsWithOrder = orderItems.map(i => ({ ...i, order_id: order.id }))
     const { error: itemsErr } = await supabase.from('order_items').insert(itemsWithOrder)
     if (itemsErr) throw itemsErr
+
+    // عدّاد استخدام العرض — لا يعطل الطلب إن فشل
+    if (appliedOfferId) {
+      const used = usableOffers.find(o => o.id === appliedOfferId)
+      if (used) {
+        supabase
+          .from('offers')
+          .update({ usage_count: Number(used.usage_count || 0) + 1 })
+          .eq('id', appliedOfferId)
+          .then(() => {}, () => {})
+      }
+    }
 
     if (chefLocation) {
       await notifyUser(
