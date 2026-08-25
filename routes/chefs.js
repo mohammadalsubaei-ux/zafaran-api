@@ -219,7 +219,22 @@ router.get('/:id', async (req, res) => {
 
     if (menuErr) throw menuErr
 
-    res.json({ success: true, data: { ...chef, menu } })
+    // العروض النشطة — بدونها يرى العميل السعر الأصلي ثم يُخصم عند الطلب، وهذا يربكه
+    const { data: rawOffers } = await supabase
+      .from('offers')
+      .select('id, menu_item_id, title, discount_type, discount_value, max_discount_amount, usage_limit, usage_count, starts_at, ends_at')
+      .eq('chef_id', req.params.id)
+      .eq('is_active', true)
+
+    const nowDate = new Date()
+    const offers = (rawOffers || []).filter(o => {
+      if (new Date(o.starts_at) > nowDate) return false
+      if (o.ends_at && new Date(o.ends_at) < nowDate) return false
+      if (o.usage_limit != null && Number(o.usage_count) >= Number(o.usage_limit)) return false
+      return true
+    })
+
+    res.json({ success: true, data: { ...chef, menu, offers } })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }
