@@ -69,6 +69,14 @@
 
       const rows = json.data.map((w) => {
         const meta = W_STATUS[w.status] || [w.status, "badge-muted"];
+
+        // بيانات التحويل — بدونها توافق ولا تعرف إلى أين تحوّل
+        const bank = w.bank && w.bank.iban
+          ? `<span style="font-family:monospace;font-size:12px;letter-spacing:.5px">${escapeHtml(w.bank.iban)}</span>
+             <button class="btn-ghost" style="padding:2px 8px;font-size:11px;margin-right:6px"
+               onclick='copyIban("${escapeHtml(w.bank.iban)}")'>نسخ</button>
+             <br><span style="font-size:11px;opacity:.6">${escapeHtml(w.bank.bank_account_name || "")}</span>`
+          : `<span style="color:#E57373;font-size:12px">لا توجد بيانات بنكية</span>`;
         const actions = w.status === "pending"
           ? `<button class="btn-primary" onclick='approveW("${w.id}", ${Number(w.amount)})'>موافقة وتحويل</button>
              <button class="btn-ghost" style="border-color:rgba(229,57,53,.5);color:#E57373" onclick='rejectW("${w.id}")'>رفض</button>`
@@ -76,6 +84,7 @@
         return `
           <tr>
             <td>${escapeHtml(w.user?.full_name || "—")}<br><span style="font-size:11px;opacity:.55">${escapeHtml(w.user?.phone || "")}</span></td>
+            <td>${bank}</td>
             <td><b>${money(w.amount)}</b></td>
             <td><span class="badge ${meta[1]}">${meta[0]}</span></td>
             <td>${formatDate(w.requested_at)}</td>
@@ -89,11 +98,17 @@
       container.innerHTML = `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>صاحب الطلب</th><th>المبلغ</th><th>الحالة</th><th>تاريخ الطلب</th><th>المعالجة</th><th>الإجراء</th></tr></thead>
+            <thead><tr><th>صاحب الطلب</th><th>بيانات التحويل</th><th>المبلغ</th><th>الحالة</th><th>تاريخ الطلب</th><th>المعالجة</th><th>الإجراء</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
       `;
+    }
+
+    function copyIban(iban) {
+      navigator.clipboard.writeText(iban)
+        .then(() => alert("نُسخ الآيبان: " + iban))
+        .catch(() => prompt("انسخ الآيبان:", iban));
     }
 
     async function approveW(id, amount) {
