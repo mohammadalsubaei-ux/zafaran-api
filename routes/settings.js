@@ -34,7 +34,7 @@ router.get('/:key', async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

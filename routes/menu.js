@@ -1,4 +1,5 @@
 ﻿const express  = require('express')
+const { requireUser, assertChefOwner, assertMenuItemOwner } = require('../auth')
 const router   = express.Router()
 const supabase = require('../supabase')
 
@@ -15,17 +16,20 @@ router.get('/chef/:chef_id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━ POST /menu — إضافة وجبة ━━━
-router.post('/', async (req, res) => {
+router.post('/', requireUser, async (req, res) => {
   try {
     const { chef_id, name, price, category, status, prep_hours, prep_minutes, description, is_available, image_url } = req.body
 
     if (!chef_id || !name || !price)
       return res.status(400).json({ success: false, message: 'chef_id والاسم والسعر مطلوبان' })
+
+    // بلا هذا الفحص ينشئ أي شخص منتجاً في متجر غيره
+    if (!(await assertChefOwner(req, res, chef_id))) return
 
     const finalStatus = status || 'available'
     if (!VALID_STATUSES.includes(finalStatus)) {
@@ -48,13 +52,15 @@ router.post('/', async (req, res) => {
     if (error) throw error
     res.status(201).json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━ PATCH /menu/:id — تعديل وجبة ━━━
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireUser, async (req, res) => {
   try {
+    if (!(await assertMenuItemOwner(req, res, req.params.id))) return
+
     const { name, price, category, status, prep_hours, prep_minutes, description, is_available, image_url } = req.body
 
     if (status && !VALID_STATUSES.includes(status)) {
@@ -81,19 +87,21 @@ router.patch('/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━ DELETE /menu/:id — حذف وجبة ━━━
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireUser, async (req, res) => {
   try {
+    if (!(await assertMenuItemOwner(req, res, req.params.id))) return
+
     const { error } = await supabase
       .from('menu_items').delete().eq('id', req.params.id)
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

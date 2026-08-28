@@ -49,7 +49,7 @@ async function requireAdmin(req, res, next) {
     req.adminId = session.admin_id
     next()
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 }
 
@@ -87,7 +87,7 @@ router.post('/auth/login', async (req, res) => {
 
     res.json({ success: true, data: { token, username: admin.username } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -100,7 +100,7 @@ router.post('/auth/logout', requireAdmin, async (req, res) => {
     await supabase.from('admin_sessions').delete().eq('token', token)
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -117,7 +117,7 @@ router.get('/auth/me', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data: admin })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -157,7 +157,7 @@ router.post('/auth/change-password', requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: 'تم تغيير كلمة السر بنجاح' })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -189,7 +189,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
       }
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -212,7 +212,7 @@ router.get('/orders', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -228,7 +228,7 @@ router.get('/chefs', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -258,7 +258,7 @@ router.patch('/chefs/:id/verify', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -274,7 +274,7 @@ router.get('/drivers', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -304,7 +304,7 @@ router.patch('/drivers/:id/verify', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -321,7 +321,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -355,7 +355,7 @@ router.patch('/settings', requireAdmin, async (req, res) => {
     }
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -375,7 +375,7 @@ router.get('/orders/:id', requireAdmin, async (req, res) => {
     }
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -416,7 +416,7 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
     })
     res.json({ success: true, data: updated })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -441,7 +441,7 @@ router.get('/users', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -491,7 +491,7 @@ router.post('/users', requireAdmin, async (req, res) => {
 
     res.status(201).json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -523,7 +523,7 @@ router.get('/users/:id', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data: { user, profile } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -554,7 +554,7 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -574,7 +574,7 @@ router.patch('/users/:id/active', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -646,7 +646,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
 
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -663,7 +663,7 @@ router.get('/banners', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -692,7 +692,7 @@ router.post('/banners', requireAdmin, async (req, res) => {
     if (error) throw error
     res.status(201).json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -730,7 +730,7 @@ router.patch('/banners/:id', requireAdmin, async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -747,7 +747,7 @@ router.delete('/banners/:id', requireAdmin, async (req, res) => {
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -776,7 +776,7 @@ router.patch('/users/:id/password', requireAdmin, async (req, res) => {
 
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -809,7 +809,7 @@ router.get('/withdrawals', requireAdmin, async (req, res) => {
     const data = (rows || []).map(r => ({ ...r, user: usersMap[r.user_id] || null }))
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -904,7 +904,7 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
 
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

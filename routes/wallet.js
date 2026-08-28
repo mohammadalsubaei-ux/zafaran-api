@@ -1,4 +1,5 @@
 const express = require("express")
+const { requireUser, assertSelf } = require('../auth')
 const router = express.Router()
 const supabase = require("../supabase")
 const getSettings = require("../settings")
@@ -59,7 +60,9 @@ async function getOrCreateWallet(userId) {
  * GET /api/wallet/:userId
  * Returns wallet info with balances
  */
-router.get("/:userId", async (req, res) => {
+router.get("/:userId", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
     const wallet = await getOrCreateWallet(userId)
@@ -88,7 +91,7 @@ router.get("/:userId", async (req, res) => {
       },
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -96,7 +99,9 @@ router.get("/:userId", async (req, res) => {
  * GET /api/wallet/:userId/transactions
  * Returns transaction history
  */
-router.get("/:userId/transactions", async (req, res) => {
+router.get("/:userId/transactions", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
     const limit = parseInt(req.query.limit) || 50
@@ -111,7 +116,7 @@ router.get("/:userId/transactions", async (req, res) => {
     if (error) throw error
     res.json({ success: true, data: data || [] })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -119,7 +124,9 @@ router.get("/:userId/transactions", async (req, res) => {
  * GET /api/wallet/:userId/credit-balance
  * Returns ONLY the active (non-expired) compensation credit available for use in orders
  */
-router.get("/:userId/credit-balance", async (req, res) => {
+router.get("/:userId/credit-balance", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
 
@@ -142,7 +149,7 @@ router.get("/:userId/credit-balance", async (req, res) => {
       },
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -150,7 +157,9 @@ router.get("/:userId/credit-balance", async (req, res) => {
  * GET /api/wallet/:userId/compensations
  * Returns all compensations for user with details
  */
-router.get("/:userId/compensations", async (req, res) => {
+router.get("/:userId/compensations", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
 
@@ -163,7 +172,7 @@ router.get("/:userId/compensations", async (req, res) => {
     if (error) throw error
     res.json({ success: true, data: data || [] })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -173,7 +182,9 @@ router.get("/:userId/compensations", async (req, res) => {
  * Body: { order_id, amount }
  * Returns: { used_amount, remaining_compensations }
  */
-router.post("/:userId/use-credit", async (req, res) => {
+router.post("/:userId/use-credit", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
     const { order_id, amount } = req.body
@@ -263,7 +274,7 @@ router.post("/:userId/use-credit", async (req, res) => {
       },
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -271,7 +282,9 @@ router.post("/:userId/use-credit", async (req, res) => {
  * GET /api/wallet/:userId/withdrawals
  * سجل طلبات السحب للمستخدم
  */
-router.get("/:userId/withdrawals", async (req, res) => {
+router.get("/:userId/withdrawals", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { data, error } = await supabase
       .from("withdrawals")
@@ -283,7 +296,7 @@ router.get("/:userId/withdrawals", async (req, res) => {
     if (error) throw error
     res.json({ success: true, data: data || [] })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -292,7 +305,9 @@ router.get("/:userId/withdrawals", async (req, res) => {
  * طلب سحب أرباح — Body: { amount }
  * الضوابط: محفظة قابلة للسحب، المبلغ >= الحد الأدنى، <= الرصيد المتاح، لا طلب معلق
  */
-router.post("/:userId/withdraw", async (req, res) => {
+router.post("/:userId/withdraw", requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.userId)) return
+
   try {
     const { userId } = req.params
     const amt = parseFloat(req.body.amount)
@@ -339,7 +354,7 @@ router.post("/:userId/withdraw", async (req, res) => {
 
     res.status(201).json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

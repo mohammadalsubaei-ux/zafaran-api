@@ -1,4 +1,5 @@
 const express = require('express')
+const { issueSession, revokeSession, requireUser, assertSelf, rateLimit } = require('../auth')
 const router  = express.Router()
 const supabase = require('../supabase')
 const crypto = require('crypto')
@@ -14,7 +15,7 @@ function generateSalt() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/register
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/register', async (req, res) => {
+router.post('/register', rateLimit({ max: 6 }), async (req, res) => {
   try {
     const { phone, full_name, role = 'customer', password } = req.body
     if (!phone || !full_name)
@@ -68,16 +69,18 @@ router.post('/register', async (req, res) => {
     // لا نعيد التجزئة والملح للتطبيق ابدا
     delete data.password_hash
     delete data.password_salt
-    res.status(201).json({ success: true, data })
+
+    const token = await issueSession(data.id)
+    res.status(201).json({ success: true, data: { ...data, token } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/login
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/login', async (req, res) => {
+router.post('/login', rateLimit({ max: 8, message: 'محاولات دخول كثيرة — انتظر قليلاً' }), async (req, res) => {
   try {
     const { phone, password } = req.body
     if (!phone || !password)
@@ -105,16 +108,22 @@ router.post('/login', async (req, res) => {
 
     delete data.password_hash
     delete data.password_salt
-    res.json({ success: true, data })
+
+    // رمز الجلسة — الهوية تُثبَت به لا بإرسال user_id في الجسم
+    const token = await issueSession(data.id)
+
+    res.json({ success: true, data: { ...data, token } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /users/:id — بيانات المستخدم (بدون أي حقول حساسة)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const { data, error } = await supabase
       .from('users')
@@ -127,7 +136,7 @@ router.get('/:id', async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -136,7 +145,9 @@ router.get('/:id', async (req, res) => {
 //  body: { avatar_url?, full_name? }
 //  الحقول المسموحة محصورة عمداً — الدور والحالة والجوال لا تُعدّل من التطبيق
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/profile', async (req, res) => {
+router.patch('/:id/profile', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const { avatar_url, full_name } = req.body
     const updates = {}
@@ -176,7 +187,7 @@ router.patch('/:id/profile', async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -186,7 +197,9 @@ router.patch('/:id/profile', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const ACTIVE_ORDER_STATUSES = ['pending', 'pending_time', 'accepted', 'preparing', 'ready', 'delivering']
 
-router.get('/:id/deletion-check', async (req, res) => {
+router.get('/:id/deletion-check', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const userId = req.params.id
     const blockers = []
@@ -270,7 +283,7 @@ router.get('/:id/deletion-check', async (req, res) => {
 
     res.json({ success: true, data: { can_delete: blockers.length === 0, blockers } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -284,7 +297,9 @@ router.get('/:id/deletion-check', async (req, res) => {
 //  الجوال يُستبدل بقيمة فريدة حتى يبقى القيد الفريد سليماً ويستطيع
 //  المستخدم التسجيل من جديد بنفس رقمه لو أراد.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/delete', async (req, res) => {
+router.post('/:id/delete', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const userId = req.params.id
     const { password } = req.body
@@ -377,14 +392,14 @@ router.post('/:id/delete', async (req, res) => {
 
     res.json({ success: true, message: 'تم حذف حسابك' })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/push-token — حفظ token الإشعارات
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/push-token', async (req, res) => {
+router.post('/push-token', requireUser, async (req, res) => {
   try {
     const { user_id, token, platform } = req.body
     if (!user_id || !token)
@@ -397,14 +412,16 @@ router.post('/push-token', async (req, res) => {
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /users/:id/notifications
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/:id/notifications', async (req, res) => {
+router.get('/:id/notifications', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const { data, error } = await supabase
       .from('notifications').select('*')
@@ -413,7 +430,7 @@ router.get('/:id/notifications', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -421,7 +438,9 @@ router.get('/:id/notifications', async (req, res) => {
 //  POST /users/:id/change-password — تغيير المستخدم كلمته بنفسه
 //  يتطلب الحالية للتحقق؛ الحسابات القديمة بلا كلمة تعينها مباشرة
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/change-password', async (req, res) => {
+router.post('/:id/change-password', rateLimit({ max: 6 }), requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.id)) return
+
   try {
     const { current_password, new_password } = req.body
 
@@ -455,7 +474,19 @@ router.post('/:id/change-password', async (req, res) => {
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /users/logout — إبطال رمز الجلسة الحالي
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/logout', requireUser, async (req, res) => {
+  try {
+    await revokeSession(req.sessionToken)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إنهاء الجلسة' })
   }
 })
 

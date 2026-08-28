@@ -1,11 +1,14 @@
 ﻿const express = require('express')
+const { requireUser, assertSelf, assertDriverOwner } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
 const { creditDeliveredOrder } = require('../orderStatus')
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { data, error } = await supabase
       .from('drivers')
       .select('*, users(full_name, phone, avatar_url)')
@@ -14,11 +17,13 @@ router.get('/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.get('/user/:user_id', async (req, res) => {
+router.get('/user/:user_id', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.user_id)) return
+
   try {
     const { data, error } = await supabase
       .from('drivers')
@@ -28,12 +33,14 @@ router.get('/user/:user_id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.patch('/:id/availability', async (req, res) => {
+router.patch('/:id/availability', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { is_available } = req.body
     const { data, error } = await supabase
       .from('drivers')
@@ -44,12 +51,14 @@ router.patch('/:id/availability', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.get('/:id/orders', async (req, res) => {
+router.get('/:id/orders', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { data, error } = await supabase
       .from('orders')
       .select('*, order_items(*), users(full_name, phone), chefs(*, users(full_name))')
@@ -58,12 +67,14 @@ router.get('/:id/orders', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.post('/:id/accept/:order_id', async (req, res) => {
+router.post('/:id/accept/:order_id', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { id: driver_id, order_id } = req.params
 
     // حارس: تأكد أن المندوب موجود وموثّق قبل ربط أي طلب به
@@ -113,12 +124,14 @@ router.post('/:id/accept/:order_id', async (req, res) => {
     )
     res.json({ success: true, data: updated })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.post('/:id/delivered/:order_id', async (req, res) => {
+router.post('/:id/delivered/:order_id', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { id: driver_id, order_id } = req.params
     const { data: order, error: orderErr } = await supabase
       .from('orders')
@@ -154,12 +167,14 @@ router.post('/:id/delivered/:order_id', async (req, res) => {
     )
     res.json({ success: true, data: updated })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
-router.patch('/:id/location', async (req, res) => {
+router.patch('/:id/location', requireUser, async (req, res) => {
   try {
+    if (!(await assertDriverOwner(req, res, req.params.id))) return
+
     const { lat, lng, heading, speed, order_id } = req.body
     if (order_id) {
       await supabase.from('driver_locations').upsert({
@@ -174,7 +189,7 @@ router.patch('/:id/location', async (req, res) => {
     }
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

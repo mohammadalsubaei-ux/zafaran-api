@@ -1,4 +1,5 @@
 const express = require('express')
+const { requireUser, assertChefOwner } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -42,12 +43,12 @@ router.get('/', async (req, res) => {
     const list = all ? (data || []) : (data || []).filter(isUsable)
     res.json({ success: true, data: list })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━ POST /offers — إنشاء عرض ━━
-router.post('/', async (req, res) => {
+router.post('/', requireUser, async (req, res) => {
   try {
     const {
       chef_id, menu_item_id, title,
@@ -58,6 +59,9 @@ router.post('/', async (req, res) => {
     } = req.body
 
     if (!chef_id)  return res.status(400).json({ success: false, message: 'chef_id مطلوب' })
+
+    // بلا هذا الفحص ينشئ أي شخص خصماً 99% على متجر غيره
+    if (!(await assertChefOwner(req, res, chef_id))) return
     if (!title || !String(title).trim()) {
       return res.status(400).json({ success: false, message: 'عنوان العرض مطلوب' })
     }
@@ -111,13 +115,17 @@ router.post('/', async (req, res) => {
     if (error) throw error
     res.status(201).json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━ PATCH /offers/:id — تفعيل أو إيقاف ━━
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireUser, async (req, res) => {
   try {
+    const { data: own } = await supabase.from('offers').select('chef_id').eq('id', req.params.id).maybeSingle()
+    if (!own) return res.status(404).json({ success: false, message: 'العرض غير موجود' })
+    if (!(await assertChefOwner(req, res, own.chef_id))) return
+
     const { is_active } = req.body
 
     if (typeof is_active !== 'boolean') {
@@ -134,18 +142,22 @@ router.patch('/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━ DELETE /offers/:id ━━
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireUser, async (req, res) => {
   try {
+    const { data: own } = await supabase.from('offers').select('chef_id').eq('id', req.params.id).maybeSingle()
+    if (!own) return res.status(404).json({ success: false, message: 'العرض غير موجود' })
+    if (!(await assertChefOwner(req, res, own.chef_id))) return
+
     const { error } = await supabase.from('offers').delete().eq('id', req.params.id)
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

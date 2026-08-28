@@ -1,4 +1,5 @@
 const express = require('express')
+const { requireUser, assertDriverOwner } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -20,7 +21,7 @@ router.get('/:orderId', async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -28,9 +29,12 @@ router.get('/:orderId', async (req, res) => {
 //  PATCH /tracking/:orderId — المندوب يرسل موقعه الحالي أثناء التوصيل
 //  body: { driver_id, lat, lng, heading, speed }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:orderId', async (req, res) => {
+router.patch('/:orderId', requireUser, async (req, res) => {
   try {
     const { driver_id, lat, lng, heading, speed } = req.body
+
+    // بلا هذا الفحص يزوّر أي شخص موقع أي مندوب
+    if (!(await assertDriverOwner(req, res, driver_id))) return
     const orderId = req.params.orderId
 
     if (!driver_id || lat == null || lng == null) {
@@ -50,7 +54,7 @@ router.patch('/:orderId', async (req, res) => {
 
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

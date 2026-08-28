@@ -1,4 +1,5 @@
 ﻿const express = require('express')
+const { requireUser, assertChefOwner } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
@@ -50,8 +51,11 @@ router.get('/delivery-settings', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders — إنشاء طلب جديد
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/', async (req, res) => {
+router.post('/', requireUser, async (req, res) => {
   try {
+    // العميل هو صاحب الجلسة — لا يُقبل customer_id من الجسم
+    req.body.customer_id = req.userId
+
     const {
       customer_id,
       chef_id,
@@ -308,7 +312,7 @@ router.post('/', async (req, res) => {
 
     res.status(201).json({ success: true, data: { ...order, items: orderItems } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -326,7 +330,7 @@ router.get('/customer/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -344,7 +348,7 @@ router.get('/chef/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -368,7 +372,7 @@ router.get('/', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -386,16 +390,17 @@ router.get('/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /orders/:id/status
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/status', async (req, res) => {
+router.patch('/:id/status', requireUser, async (req, res) => {
   try {
-    const { status, user_id, cancel_reason } = req.body
+    const { status, cancel_reason } = req.body
+    const user_id = req.userId
 
     const chefUsable = ['accepted', 'preparing', 'ready', 'delivered', 'cancelled']
     if (!chefUsable.includes(status)) {
@@ -459,14 +464,14 @@ router.patch('/:id/status', async (req, res) => {
     const updated = await applyStatusChange(order, status, { cancel_reason, cancelled_by: 'chef' })
     res.json({ success: true, data: updated })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders/:id/renotify-drivers — العميل يعيد نداء المناديب عند طول الانتظار
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/renotify-drivers', async (req, res) => {
+router.post('/:id/renotify-drivers', requireUser, async (req, res) => {
   try {
     const { user_id } = req.body
     if (!user_id) {
@@ -508,7 +513,7 @@ router.post('/:id/renotify-drivers', async (req, res) => {
 
     res.json({ success: true, notified: availableDrivers ? availableDrivers.length : 0 })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -516,9 +521,9 @@ router.post('/:id/renotify-drivers', async (req, res) => {
 //  POST /orders/:id/switch-to-pickup — تحويل العميل طلبه لاستلام شخصي
 //  (خياره عند غياب المناديب) مع إعادة تسعير كاملة: حذف رسوم التوصيل وحصصها
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/switch-to-pickup', async (req, res) => {
+router.post('/:id/switch-to-pickup', requireUser, async (req, res) => {
   try {
-    const { user_id } = req.body
+    const user_id = req.userId
     if (!user_id) {
       return res.status(401).json({ success: false, message: 'التحقق من الهوية مطلوب' })
     }
@@ -590,7 +595,7 @@ router.post('/:id/switch-to-pickup', async (req, res) => {
 
     res.json({ success: true, data: updated })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -598,7 +603,7 @@ router.post('/:id/switch-to-pickup', async (req, res) => {
 //  PATCH /orders/:id/confirm-time — رد الشيف على الوقت المقترح
 //  body: { action: 'accept' | 'counter', counter_time? }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/confirm-time', async (req, res) => {
+router.patch('/:id/confirm-time', requireUser, async (req, res) => {
   try {
     const { action, counter_time, confirmed_time } = req.body
 
@@ -669,7 +674,7 @@ router.patch('/:id/confirm-time', async (req, res) => {
 
     res.json({ success: true, data: order })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -677,7 +682,7 @@ router.patch('/:id/confirm-time', async (req, res) => {
 //  PATCH /orders/:id/respond-time — رد العميل على اقتراح الشيف البديل
 //  body: { action: 'accept' | 'reject' }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/respond-time', async (req, res) => {
+router.patch('/:id/respond-time', requireUser, async (req, res) => {
   try {
     const { action } = req.body
 
@@ -725,17 +730,18 @@ router.patch('/:id/respond-time', async (req, res) => {
 
     res.json({ success: true, data: order })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders/:id/review
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/review', async (req, res) => {
+router.post('/:id/review', requireUser, async (req, res) => {
   try {
     const order_id = req.params.id
-    const { customer_id, rating, comment } = req.body
+    const { rating, comment } = req.body
+    const customer_id = req.userId
     const numericRating = Number(rating)
 
     if (!customer_id) {
@@ -823,7 +829,7 @@ router.post('/:id/review', async (req, res) => {
       updated: Boolean(existingReview)
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -843,7 +849,7 @@ router.get('/:id/review', async (req, res) => {
 
     res.json({ success: true, data: data || null })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

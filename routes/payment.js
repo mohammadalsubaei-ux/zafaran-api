@@ -1,4 +1,5 @@
 const express = require('express')
+const { requireUser } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -26,7 +27,7 @@ async function processPaymentWithGateway({ orderId, paymentMethod, amount }) {
 //  POST /payment/process — معالجة دفع طلب معين
 //  body: { order_id, payment_method }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/process', async (req, res) => {
+router.post('/process', requireUser, async (req, res) => {
   try {
     const { order_id, payment_method } = req.body
 
@@ -45,6 +46,11 @@ router.post('/process', async (req, res) => {
       .single()
 
     if (fetchErr) throw fetchErr
+
+    // بلا هذا الفحص يعلّم أي شخص طلب غيره مدفوعاً
+    if (String(order.customer_id) !== String(req.userId)) {
+      return res.status(403).json({ success: false, message: 'غير مصرح — هذا الطلب ليس لك' })
+    }
 
     if (order.payment_status === 'paid') {
       return res.status(409).json({ success: false, message: 'تم دفع هذا الطلب مسبقاً' })
@@ -81,7 +87,7 @@ router.post('/process', async (req, res) => {
       }
     })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 

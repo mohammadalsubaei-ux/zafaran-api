@@ -1,4 +1,5 @@
 const express = require('express')
+const { requireUser, assertChefOwner } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -77,7 +78,7 @@ router.get('/search', async (req, res) => {
 
     res.json({ success: true, data: Array.from(chefsMap.values()) })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -172,7 +173,7 @@ router.get('/', async (req, res) => {
 
     res.json({ success: true, data: clean })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -236,7 +237,7 @@ router.get('/:id', async (req, res) => {
 
     res.json({ success: true, data: { ...chef, menu, offers } })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -244,8 +245,10 @@ router.get('/:id', async (req, res) => {
 //  PATCH /chefs/:id/toggle — تحديث حالة المتجر
 //  body: { status: 'open' | 'preorder' | 'closed' }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/toggle', async (req, res) => {
+router.patch('/:id/toggle', requireUser, async (req, res) => {
   try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const { status } = req.body
 
     if (!['open', 'preorder', 'closed'].includes(status)) {
@@ -273,7 +276,7 @@ router.patch('/:id/toggle', async (req, res) => {
 
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -281,8 +284,10 @@ router.patch('/:id/toggle', async (req, res) => {
 //  PATCH /chefs/:id/offers — تحديث أنواع التقديم (مطبخ/عزائم/بوفيه/حلويات/معجنات/مشروبات)
 //  body: أي من { offers_daily, offers_hospitality, offers_buffet, offers_sweets, offers_pastries, offers_drinks } (boolean)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/offers', async (req, res) => {
+router.patch('/:id/offers', requireUser, async (req, res) => {
   try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const ALLOWED = ['offers_daily', 'offers_hospitality', 'offers_buffet', 'offers_sweets', 'offers_pastries', 'offers_drinks']
     const updates = {}
 
@@ -304,7 +309,7 @@ router.patch('/:id/offers', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -315,8 +320,10 @@ router.patch('/:id/offers', async (req, res) => {
 //  لا بث داخل التطبيق — نربط بث المتجر الموجود على تيك توك أو غيره.
 //  إيقاف تلقائي بعد 4 ساعات يجري عند القراءة (انظر GET /chefs).
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/live', async (req, res) => {
+router.patch('/:id/live', requireUser, async (req, res) => {
   try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const { is_live, live_url, live_item_id, live_item_price } = req.body
 
     if (typeof is_live !== 'boolean') {
@@ -404,7 +411,7 @@ router.patch('/:id/live', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -412,8 +419,10 @@ router.patch('/:id/live', async (req, res) => {
 //  PATCH /chefs/:id/location — تحديث موقع المتجر (خط الطول/العرض)
 //  body: { lat, lng }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/location', async (req, res) => {
+router.patch('/:id/location', requireUser, async (req, res) => {
   try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const { lat, lng } = req.body
 
     if (lat == null || lng == null) {
@@ -430,7 +439,7 @@ router.patch('/:id/location', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
@@ -439,8 +448,10 @@ router.patch('/:id/location', async (req, res) => {
 //  body: { cert_url }
 //  الحقل غير إلزامي بالتسجيل — يُرفع من لوحة المتجر خلال المهلة
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.patch('/:id/freelance-cert', async (req, res) => {
+router.patch('/:id/freelance-cert', requireUser, async (req, res) => {
   try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const { cert_url } = req.body
 
     if (!cert_url || typeof cert_url !== 'string' || !cert_url.startsWith('https://')) {
@@ -460,7 +471,7 @@ router.patch('/:id/freelance-cert', async (req, res) => {
     if (error) throw error
     res.json({ success: true, data })
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message })
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
 
