@@ -319,6 +319,21 @@ router.post("/:userId/withdraw", requireUser, async (req, res) => {
     if (!wallet.is_withdrawable)
       return res.status(403).json({ success: false, message: "هذه المحفظة غير قابلة للسحب" })
 
+    // بلا آيبان يصل الطلب للإدارة ولا يمكن تنفيذه — نطلبه هنا لا عند التسجيل
+    const { data: chefRow } = await supabase
+      .from("chefs")
+      .select("iban, bank_account_name")
+      .eq("user_id", userId)
+      .maybeSingle()
+
+    if (chefRow && (!chefRow.iban || !chefRow.bank_account_name)) {
+      return res.status(400).json({
+        success: false,
+        code: "BANK_REQUIRED",
+        message: "أضف رقم الآيبان واسم صاحب الحساب أولاً حتى نحوّل أرباحك"
+      })
+    }
+
     const s = await getSettings()
     if (amt < Number(s.min_withdrawal_amount || 200))
       return res.status(400).json({ success: false, message: "الحد الأدنى للسحب " + Number(s.min_withdrawal_amount || 200) + " ريال" })

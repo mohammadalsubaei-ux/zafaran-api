@@ -806,7 +806,24 @@ router.get('/withdrawals', requireAdmin, async (req, res) => {
       for (const u of usersRows || []) usersMap[u.id] = u
     }
 
-    const data = (rows || []).map(r => ({ ...r, user: usersMap[r.user_id] || null }))
+    // بيانات التحويل — بدونها توافق على السحب ولا تعرف إلى أين تحوّل
+    let bankMap = {}
+    if (userIds.length > 0) {
+      const { data: chefRows } = await supabase
+        .from('chefs')
+        .select('user_id, iban, bank_account_name')
+        .in('user_id', userIds)
+
+      for (const ch of chefRows || []) {
+        bankMap[ch.user_id] = { iban: ch.iban || null, bank_account_name: ch.bank_account_name || null }
+      }
+    }
+
+    const data = (rows || []).map(r => ({
+      ...r,
+      user: usersMap[r.user_id] || null,
+      bank: bankMap[r.user_id] || null
+    }))
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })

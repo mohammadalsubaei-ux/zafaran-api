@@ -314,6 +314,46 @@ router.patch('/:id/offers', requireUser, async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /chefs/:id/bank — بيانات التحويل البنكي
+//  body: { iban, bank_account_name }
+//
+//  يُطلب عند أول سحب لا عند التسجيل — طلبه مبكراً عائق يوقف بعض المتاجر.
+//  الآيبان السعودي: SA + 22 رقماً = 24 خانة.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/:id/bank', requireUser, async (req, res) => {
+  try {
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
+    const raw = String(req.body.iban || '').replace(/\s+/g, '').toUpperCase()
+    const name = String(req.body.bank_account_name || '').trim()
+
+    if (!raw) {
+      return res.status(400).json({ success: false, message: 'رقم الآيبان مطلوب' })
+    }
+
+    if (!/^SA\d{22}$/.test(raw)) {
+      return res.status(400).json({ success: false, message: 'آيبان غير صحيح — يبدأ بـ SA ويتكوّن من 24 خانة' })
+    }
+
+    if (name.length < 3) {
+      return res.status(400).json({ success: false, message: 'اسم صاحب الحساب مطلوب كما هو في البنك' })
+    }
+
+    const { data, error } = await supabase
+      .from('chefs')
+      .update({ iban: raw, bank_account_name: name })
+      .eq('id', req.params.id)
+      .select('id, iban, bank_account_name')
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر حفظ بيانات التحويل' })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /chefs/:id/live — تشغيل/إيقاف البث المباشر
 //  body: { is_live, live_url?, live_item_id?, live_item_price? }
 //
