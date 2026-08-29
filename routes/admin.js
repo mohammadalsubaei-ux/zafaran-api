@@ -1,4 +1,5 @@
 const express = require('express')
+const { canBuyPlan, planStatus } = require('../plans')
 const { rateLimit } = require('../auth')
 const router = express.Router()
 const crypto = require('crypto')
@@ -921,6 +922,127 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
     )
 
     res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /admin/plans — الباقات مع حالتها
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/plans', requireAdmin, async (req, res) => {
+  try {
+    const { data: plans, error } = await supabase
+      .from('store_plans')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200)
+
+    if (error) throw error
+
+    const chefIds = [...new Set((plans || []).map(p => p.chef_id))]
+    let chefMap = {}
+
+    if (chefIds.length > 0) {
+      const { data: chefs } = await supabase
+        .from('chefs')
+        .select('id, rating_avg, total_orders, users(full_name, phone)')
+        .in('id', chefIds)
+
+      for (const ch of chefs || []) chefMap[ch.id] = ch
+    }
+
+    const data = (plans || []).map(p => ({
+      ...p,
+      chef: chefMap[p.chef_id] || null,
+      status: planStatus(p, chefMap[p.chef_id])
+    }))
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /admin/plans — تفعيل باقة يدوياً بعد التحويل عبر واتساب
+//  body: { chef_id, plan_type, impressions_total, commission_rate?, ends_at? }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/plans', requireAdmin, async (req, res) => {
+  try {
+    const { chef_id, plan_type, impressions_total, commission_rate, ends_at } = req.body
+
+    if (!chef_id) return res.status(400).json({ success: false, message: 'chef_id مطلوب' })
+    if (!['featured', 'premium'].includes(plan_type)) {
+      return res.status(400).json({ success: false, message: 'نوع الباقة يجب أن يكون featured أو premium' })
+    }
+
+    const impressions = Number(impressions_total)
+    if (!Number.isFinite(impressions) || impressions <= 0) {
+      return res.status(400).json({ success: false, message: 'عدد الظهورات غير صحيح' })
+    }
+
+    const { data: chef } = await supabase
+      .from('chefs')
+      .select('id, rating_avg, total_orders')
+      .eq('id', chef_id)
+      .maybeSingle()
+
+    if (!chef) return res.status(404).json({ success: false, message: 'المتجر غير موجود' })
+
+    // لا تُباع لمتجر لم يثبت نفسه — يحمي العميل ويحمي المتجر من إحراق ميزانيته
+    const check = canBuyPlan(chef)
+    if (!check.allowed) {
+      return res.status(409).json({ success: false, message: check.reason })
+    }
+
+    const { data, error } = await supabase
+      .from('store_plans')
+      .insert({
+        chef_id,
+        plan_type,
+        impressions_total: impressions,
+        commission_rate: commission_rate != null ? Number(commission_rate) : null,
+        ends_at: ends_at || null
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.status(201).json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/plans/:id — تعليق أو إنهاء
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/plans/:id', requireAdmin, async (req, res) => {
+  try {
+    const { is_suspended, is_active, suspended_reason } = req.body
+    const updates = {}
+
+    if (typeof is_suspended === 'boolean') {
+      updates.is_suspended = is_suspended
+      updates.suspended_reason = is_suspended ? (suspended_reason || 'معلّقة من الإدارة') : null
+    }
+    if (typeof is_active === 'boolean') updates.is_active = is_active
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, message: 'لا يوجد تغيير' })
+    }
+
+    const { data, error } = await supabase
+      .from('store_plans')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }

@@ -1,6 +1,7 @@
 const express = require('express')
 const { requireUser, assertChefOwner } = require('../auth')
 const { tierOf } = require('../tiers')
+const { isPlanLive, planStatus } = require('../plans')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -135,6 +136,21 @@ router.get('/', async (req, res) => {
       })
     }
 
+    // الباقات النشطة — الظهور المدفوع
+    let planByChef = {}
+
+    if (chefIds.length > 0) {
+      const { data: plans } = await supabase
+        .from('store_plans')
+        .select('id, chef_id, plan_type, impressions_total, impressions_used, is_suspended, is_active, ends_at')
+        .in('chef_id', chefIds)
+        .eq('is_active', true)
+
+      for (const pl of plans || []) {
+        if (!planByChef[pl.chef_id]) planByChef[pl.chef_id] = pl
+      }
+    }
+
     // البث ينتهي تلقائياً بعد 4 ساعات — حتى لا تبقى الشارة مضاءة لمن نسي إطفاءها
     const LIVE_MAX_MS = 4 * 60 * 60 * 1000
     const now = Date.now()
@@ -195,6 +211,8 @@ router.get('/', async (req, res) => {
       return 2 * R * Math.asin(Math.sqrt(h))
     }
 
+    const featuredShown = []
+
     const scored = clean.map(chef => {
       const rating = Math.min(Number(chef.rating_avg || 0) / 5, 1)
       const orders = Math.min(Number(chef.total_orders || 0) / 50, 1)
@@ -215,8 +233,15 @@ router.get('/', async (req, res) => {
         (chef.is_verified         ? 5  : 0) +
         ((chef.offers || []).length > 0 ? 5 : 0)
 
+      const plan = planByChef[chef.id]
+      const featured = isPlanLive(plan, chef)
+
+      if (featured) featuredShown.push(plan.id)
+
       return {
         ...chef,
+        // معلَّم دائماً بوسم "إعلان" في الواجهة — لا ظهور مدفوع مخفي
+        is_featured: featured,
         tier: tierOf(chef),
         distance_km: km != null ? Math.round(km * 10) / 10 : null,
         rank_score: Math.round(score * 10) / 10
@@ -224,6 +249,22 @@ router.get('/', async (req, res) => {
     })
 
     scored.sort((a, b) => b.rank_score - a.rank_score)
+
+    // عدّاد الظهورات — تُباع بالعدد لا بالمدة، فالعدّ جوهر الباقة.
+    // صامت ولا يعطل الرد إن فشل.
+    if (featuredShown.length > 0) {
+      ;(async () => {
+        for (const planId of featuredShown) {
+          const plan = Object.values(planByChef).find(p => p.id === planId)
+          if (!plan) continue
+
+          await supabase
+            .from('store_plans')
+            .update({ impressions_used: Number(plan.impressions_used || 0) + 1 })
+            .eq('id', planId)
+        }
+      })().catch(() => {})
+    }
 
     res.json({ success: true, data: scored })
   } catch (err) {
@@ -289,7 +330,26 @@ router.get('/:id', async (req, res) => {
       return true
     })
 
-    res.json({ success: true, data: { ...chef, menu, offers, tier: tierOf(chef) } })
+    // حالة الباقة — لصاحب المتجر ليعرف سبب توقف الظهور بدل صمت محيّر
+    const { data: plan } = await supabase
+      .from('store_plans')
+      .select('*')
+      .eq('chef_id', req.params.id)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    res.json({
+      success: true,
+      data: {
+        ...chef,
+        menu,
+        offers,
+        tier: tierOf(chef),
+        plan_status: planStatus(plan, chef)
+      }
+    })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
