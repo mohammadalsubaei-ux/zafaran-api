@@ -13,6 +13,8 @@ const PUBLIC_KEYS = [
   'latest_version',        // أحدث نسخة منشورة (1.0.2) — المصدر المعتمد لرسالة التحديث
   'latest_version_code',   // مهجور: versionCode مجمّد في app.json ولا يعكس نسخة EAS
   'update_required',       // هل التحديث إجباري (اختياري مستقبلاً)
+  'bank_transfer_iban',    // آيبان المنصة — يظهر للعميل عند اختيار التحويل البنكي
+  'bank_transfer_name',    // اسم صاحب الحساب — البنوك ترفض التحويل إن لم يطابق
 ]
 
 router.get('/:key', async (req, res) => {

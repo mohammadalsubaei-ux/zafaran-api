@@ -96,6 +96,13 @@ router.post('/', requireUser, async (req, res) => {
 
     }
 
+    // قائمة بيضاء لطرق الدفع — بدونها يمرر أي أحد قيمة غير معروفة
+    // فتُسجَّل في الطلب ولا تعرف الإدارة كيف حُصّل المبلغ.
+    const ALLOWED_PAYMENT = ['cash', 'bank_transfer']
+    if (!ALLOWED_PAYMENT.includes(String(payment_method || 'cash'))) {
+      return res.status(400).json({ success: false, message: 'طريقة الدفع غير مدعومة' })
+    }
+
     // حارس الإيقاف: الحساب الموقوف لا ينشئ طلبات
     const { data: customerRow } = await supabase
       .from('users')
