@@ -89,7 +89,7 @@ router.get('/search', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/', async (req, res) => {
   try {
-    const { city, status, user_id } = req.query
+    const { city, status, user_id, lat, lng } = req.query
 
     let query = supabase
       .from('chefs')
@@ -171,7 +171,59 @@ router.get('/', async (req, res) => {
         .then(() => {}, () => {})
     }
 
-    res.json({ success: true, data: clean })
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    //  معادلة الترتيب — معلنة ولا تُشترى
+    //
+    //  35% تقييم + 25% عدد الطلبات + 20% قرب + مكافآت (مفتوح/موثّق/عرض)
+    //  الترتيب بالتقييم وحده كان يظلم المتجر الجديد الممتاز ويقدّم
+    //  متجراً بعيداً مغلقاً على متجر قريب مفتوح.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const userLat = Number(lat)
+    const userLng = Number(lng)
+    const hasCoords = Number.isFinite(userLat) && Number.isFinite(userLng)
+
+    // مسافة تقريبية بالكيلومتر (هافرساين)
+    const distanceKm = (aLat, aLng, bLat, bLng) => {
+      const R = 6371
+      const dLat = (bLat - aLat) * Math.PI / 180
+      const dLng = (bLng - aLng) * Math.PI / 180
+      const h =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2
+      return 2 * R * Math.asin(Math.sqrt(h))
+    }
+
+    const scored = clean.map(chef => {
+      const rating = Math.min(Number(chef.rating_avg || 0) / 5, 1)
+      const orders = Math.min(Number(chef.total_orders || 0) / 50, 1)
+
+      let near = 0.5
+      let km = null
+
+      if (hasCoords && Number.isFinite(Number(chef.lat)) && Number.isFinite(Number(chef.lng))) {
+        km = distanceKm(userLat, userLng, Number(chef.lat), Number(chef.lng))
+        near = 1 - Math.min(km / 15, 1)
+      }
+
+      const score =
+        rating * 35 +
+        orders * 25 +
+        near   * 20 +
+        (chef.status === 'open'   ? 10 : 0) +
+        (chef.is_verified         ? 5  : 0) +
+        ((chef.offers || []).length > 0 ? 5 : 0)
+
+      return {
+        ...chef,
+        distance_km: km != null ? Math.round(km * 10) / 10 : null,
+        rank_score: Math.round(score * 10) / 10
+      }
+    })
+
+    scored.sort((a, b) => b.rank_score - a.rank_score)
+
+    res.json({ success: true, data: scored })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
