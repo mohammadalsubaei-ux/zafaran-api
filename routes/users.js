@@ -15,7 +15,25 @@ function generateSalt() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/register
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/register', rateLimit({ max: 6 }), async (req, res) => {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  مسارا كلمة المرور — معطّلان
+//
+//  التطبيق صار يسجّل ويدخل برمز الجوال (POST /users/phone-auth).
+//  تركهما مفتوحين يعني باباً خلفياً ينشئ حسابات بأرقام غير محققة،
+//  فيُبطل نظام التحقق كله. نبقيهما ليردّا رسالة واضحة بدل 404 غامض
+//  لمن بقي على نسخة قديمة من التطبيق.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const LEGACY_AUTH_MESSAGE = 'حدّث التطبيق لآخر نسخة — الدخول صار برمز يصلك على جوالك'
+
+router.post('/register', (req, res) =>
+  res.status(410).json({ success: false, code: 'LEGACY_AUTH', message: LEGACY_AUTH_MESSAGE })
+)
+
+router.post('/login', (req, res) =>
+  res.status(410).json({ success: false, code: 'LEGACY_AUTH', message: LEGACY_AUTH_MESSAGE })
+)
+
+router.post('/_disabled_register', rateLimit({ max: 6 }), async (req, res) => {
   try {
     const { phone, full_name, role = 'customer', password } = req.body
     if (!phone || !full_name)
@@ -80,7 +98,7 @@ router.post('/register', rateLimit({ max: 6 }), async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/login
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/login', rateLimit({ max: 8, message: 'محاولات دخول كثيرة — انتظر قليلاً' }), async (req, res) => {
+router.post('/_disabled_login', rateLimit({ max: 8 }), async (req, res) => {
   try {
     const { phone, password } = req.body
     if (!phone || !password)
