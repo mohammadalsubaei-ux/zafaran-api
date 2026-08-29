@@ -157,6 +157,40 @@
       renderOrderDetail(json.data);
     }
 
+    const PAY_METHOD = {
+      cash: "الدفع عند الاستلام",
+      bank_transfer: "تحويل بنكي",
+    };
+
+    function PAY_BADGE(status) {
+      const map = {
+        paid:    ["مدفوع", "#4CAF50"],
+        pending: ["بانتظار الدفع", "#F0A500"],
+        failed:  ["فشل", "#E53935"],
+      };
+      const [label, color] = map[status] || [status || "—", "#8A6030"];
+      return `<span style="color:${color};font-weight:700">${escapeHtml(label)}</span>`;
+    }
+
+    // التحويل البنكي يصل خارج النظام — بلا هذا الزر يبقى الطلب معلّقاً للأبد
+    async function confirmPayment(id) {
+      const note = prompt("ملاحظة (اختياري) — مثل: رقم عملية التحويل");
+      if (note === null) return;
+
+      const json = await authFetch(`/orders/${id}/payment`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_status: "paid", note }),
+      });
+
+      if (json?.success) {
+        alert("تم تأكيد الدفع");
+        location.reload();
+      } else {
+        alert(json?.message || "تعذر التأكيد");
+      }
+    }
+
     function sectionTitle(text) {
       return `<div style="font-weight:800;font-size:13px;color:#C97D20;margin:16px 0 8px">${text}</div>`;
     }
@@ -227,6 +261,15 @@
         ${infoRow("عمولة زعفران", money(d.platform_fee))}
         ${infoRow("حصة الشيف", money(d.chef_share))}
         ${infoRow("حصة المندوب", money(d.driver_share))}
+
+        ${sectionTitle("الدفع")}
+        ${infoRow("الطريقة", PAY_METHOD[d.payment_method] || escapeHtml(d.payment_method || "—"))}
+        ${infoRow("الحالة", PAY_BADGE(d.payment_status))}
+        ${d.paid_at ? infoRow("وقت التأكيد", formatDate(d.paid_at)) : ""}
+        ${d.payment_note ? infoRow("ملاحظة", escapeHtml(d.payment_note)) : ""}
+        ${d.payment_status !== "paid" ? `
+          <button class="btn-primary" style="width:100%;margin-top:10px"
+            onclick='confirmPayment("${d.id}")'>تأكيد استلام المبلغ</button>` : ""}
 
         ${sectionTitle("الإجراءات")}
         ${actionsHtml}

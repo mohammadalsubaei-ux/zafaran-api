@@ -1048,4 +1048,62 @@ router.patch('/plans/:id', requireAdmin, async (req, res) => {
   }
 })
 
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PATCH /admin/orders/:id/payment — توثيق الدفع بعد وصول الإيصال
+//  body: { payment_status: 'paid' | 'pending' | 'failed', note? }
+//
+//  التحويل البنكي يصل خارج النظام (واتساب)، فبلا هذا المسار يبقى
+//  الطلب "بانتظار الدفع" إلى الأبد ولا تُغلق الدورة.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.patch('/orders/:id/payment', requireAdmin, async (req, res) => {
+  try {
+    const { payment_status, note } = req.body
+    const ALLOWED = ['paid', 'pending', 'failed']
+
+    if (!ALLOWED.includes(payment_status)) {
+      return res.status(400).json({ success: false, message: 'حالة الدفع غير صحيحة' })
+    }
+
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, customer_id, payment_status, total')
+      .eq('id', req.params.id)
+      .maybeSingle()
+
+    if (!order) return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+
+    if (order.payment_status === payment_status) {
+      return res.status(409).json({ success: false, message: 'الحالة كما هي' })
+    }
+
+    const updates = { payment_status }
+    if (payment_status === 'paid') updates.paid_at = new Date().toISOString()
+    if (note) updates.payment_note = String(note).trim()
+
+    const { data, error } = await supabase
+      .from('orders')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    if (payment_status === 'paid') {
+      await notifyUser(
+        order.customer_id,
+        'تم تأكيد الدفع',
+        'استلمنا تحويلك — طلبك في طريقه إليك',
+        'payment_confirmed',
+        { order_id: order.id }
+      )
+    }
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
 module.exports = router
