@@ -1,5 +1,6 @@
 const express = require('express')
 const { requireUser, assertChefOwner } = require('../auth')
+const { tierOf } = require('../tiers')
 const router = express.Router()
 const supabase = require('../supabase')
 
@@ -216,6 +217,7 @@ router.get('/', async (req, res) => {
 
       return {
         ...chef,
+        tier: tierOf(chef),
         distance_km: km != null ? Math.round(km * 10) / 10 : null,
         rank_score: Math.round(score * 10) / 10
       }
@@ -287,7 +289,7 @@ router.get('/:id', async (req, res) => {
       return true
     })
 
-    res.json({ success: true, data: { ...chef, menu, offers } })
+    res.json({ success: true, data: { ...chef, menu, offers, tier: tierOf(chef) } })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
