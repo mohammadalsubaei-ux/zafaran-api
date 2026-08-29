@@ -15,7 +15,7 @@
 const crypto = require('crypto')
 const supabase = require('./supabase')
 
-const SESSION_DAYS = 60
+const SESSION_DAYS = 30
 
 function newToken() {
   return crypto.randomBytes(32).toString('hex')

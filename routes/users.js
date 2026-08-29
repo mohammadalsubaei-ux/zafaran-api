@@ -302,11 +302,7 @@ router.post('/:id/delete', requireUser, async (req, res) => {
 
   try {
     const userId = req.params.id
-    const { password } = req.body
-
-    if (!password) {
-      return res.status(400).json({ success: false, message: 'اكتب كلمة المرور لتأكيد الحذف' })
-    }
+    const { confirm_phone } = req.body
 
     const { data: user } = await supabase
       .from('users').select('*').eq('id', userId).single()
@@ -314,12 +310,16 @@ router.post('/:id/delete', requireUser, async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
     if (user.deleted_at) return res.status(409).json({ success: false, message: 'الحساب محذوف مسبقاً' })
 
-    // تحقق الهوية — بدونه يستطيع أي أحد حذف أي حساب بمعرفة معرّفه
-    if (!user.password_hash || !user.password_salt) {
-      return res.status(409).json({ success: false, message: 'حسابك يحتاج تعيين كلمة مرور — تواصل مع دعم زعفران' })
+    // الهوية مثبتة بالجلسة (requireUser + assertSelf). تأكيد الرقم خطوة
+    // إضافية تمنع الحذف بالخطأ — لا كلمة مرور بعد التحوّل لرمز الجوال.
+    const typed = String(confirm_phone || '').replace(/[^0-9]/g, '')
+    const real  = String(user.phone || '').replace(/[^0-9]/g, '')
+
+    if (!typed) {
+      return res.status(400).json({ success: false, message: 'اكتب رقم جوالك لتأكيد الحذف' })
     }
-    if (hashPassword(String(password), user.password_salt) !== user.password_hash) {
-      return res.status(401).json({ success: false, message: 'كلمة المرور غير صحيحة' })
+    if (typed !== real) {
+      return res.status(401).json({ success: false, message: 'رقم الجوال لا يطابق حسابك' })
     }
 
     // إعادة فحص الموانع خادمياً — لا نثق بفحص الواجهة وحده
@@ -487,6 +487,125 @@ router.post('/logout', requireUser, async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إنهاء الجلسة' })
+  }
+})
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST /users/phone-auth — الدخول والتسجيل برمز الجوال
+//
+//  التطبيق يتحقق من الرقم عبر Firebase (هي التي ترسل الرمز)، ثم يرسل
+//  لنا idToken. نتحقق منه عند Google — لا نثق بالرقم القادم من التطبيق.
+//
+//  نستخدم واجهة Identity Toolkit بمفتاح الويب بدل firebase-admin:
+//  لا حساب خدمة ولا ملف مفاتيح على الخادم، ونتيجة التحقق واحدة.
+//
+//  body: { idToken, full_name?, role?, city? }
+//   - حساب موجود  → جلسة مباشرة
+//   - حساب جديد   → يلزم full_name (وrole للمتجر/المندوب)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.post('/phone-auth', rateLimit({ max: 20 }), async (req, res) => {
+  try {
+    const { idToken, full_name, role = 'customer', city } = req.body
+
+    if (!idToken) {
+      return res.status(400).json({ success: false, message: 'رمز التحقق مطلوب' })
+    }
+
+    const apiKey = process.env.FIREBASE_WEB_API_KEY
+    if (!apiKey) {
+      return res.status(500).json({ success: false, message: 'التحقق بالجوال غير مهيأ على الخادم' })
+    }
+
+    // التحقق عند Google — الرقم يأتي من ردها لا من التطبيق
+    const verifyRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken })
+      }
+    )
+
+    const verifyJson = await verifyRes.json().catch(() => null)
+    const fbUser = verifyJson?.users?.[0]
+
+    if (!verifyRes.ok || !fbUser) {
+      return res.status(401).json({ success: false, message: 'رمز التحقق غير صالح أو منتهي' })
+    }
+
+    if (!fbUser.phoneNumber) {
+      return res.status(400).json({ success: false, message: 'لم نتعرف على رقم الجوال' })
+    }
+
+    // 966xxxxxxxxx → 05xxxxxxxx (الصيغة المخزّنة في قاعدتنا)
+    let phone = String(fbUser.phoneNumber).replace(/[^0-9]/g, '')
+    if (phone.startsWith('966')) phone = '0' + phone.slice(3)
+    if (!phone.startsWith('0')) phone = '0' + phone
+
+    const { data: existing } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', phone)
+      .maybeSingle()
+
+    // ── حساب موجود ──
+    if (existing) {
+      if (existing.deleted_at) {
+        return res.status(403).json({ success: false, message: 'هذا الحساب محذوف' })
+      }
+
+      delete existing.password_hash
+      delete existing.password_salt
+
+      const token = await issueSession(existing.id)
+      return res.json({ success: true, data: { ...existing, token }, is_new: false })
+    }
+
+    // ── حساب جديد ──
+    const name = String(full_name || '').trim()
+    if (!name) {
+      // التطبيق يعرض شاشة الاسم ثم يعيد الطلب بنفس الرمز
+      return res.status(200).json({ success: true, needs_profile: true, phone })
+    }
+
+    const { data: created, error: createErr } = await supabase
+      .from('users')
+      .insert({ phone, full_name: name, role })
+      .select()
+      .single()
+
+    if (createErr) throw createErr
+
+    if (role === 'chef') {
+      const { error: chefErr } = await supabase
+        .from('chefs')
+        .insert({ user_id: created.id, city: city || null, status: 'closed', is_verified: false })
+
+      if (chefErr) {
+        await supabase.from('users').delete().eq('id', created.id)
+        return res.status(500).json({ success: false, message: 'تعذر إنشاء ملف المتجر' })
+      }
+    }
+
+    if (role === 'driver') {
+      const { error: drvErr } = await supabase
+        .from('drivers')
+        .insert({ user_id: created.id, is_available: false, is_verified: false })
+
+      if (drvErr) {
+        await supabase.from('users').delete().eq('id', created.id)
+        return res.status(500).json({ success: false, message: 'تعذر إنشاء ملف المندوب' })
+      }
+    }
+
+    delete created.password_hash
+    delete created.password_salt
+
+    const token = await issueSession(created.id)
+    res.status(201).json({ success: true, data: { ...created, token }, is_new: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام التحقق — حاول مرة ثانية' })
   }
 })
 
