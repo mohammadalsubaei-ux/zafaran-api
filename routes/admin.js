@@ -1,4 +1,5 @@
 const express = require('express')
+const { rateLimit } = require('../auth')
 const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
@@ -56,7 +57,7 @@ async function requireAdmin(req, res, next) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /admin/auth/login
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/auth/login', async (req, res) => {
+router.post('/auth/login', rateLimit({ max: 6, message: 'محاولات دخول كثيرة — انتظر قليلاً' }), async (req, res) => {
   try {
     const { username, password } = req.body
     if (!username || !password) {

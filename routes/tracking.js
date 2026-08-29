@@ -6,8 +6,35 @@ const supabase = require('../supabase')
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /tracking/:orderId — جلب آخر موقع معروف للمندوب على هذا الطلب
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/:orderId', async (req, res) => {
+router.get('/:orderId', requireUser, async (req, res) => {
   try {
+    // الموقع اللحظي للمندوب — لأطراف الطلب وحدهم
+    const { data: order } = await supabase
+      .from('orders')
+      .select('customer_id, chef_id, driver_id')
+      .eq('id', req.params.orderId)
+      .maybeSingle()
+
+    if (!order) return res.json({ success: true, data: null })
+
+    let allowed = String(order.customer_id) === String(req.userId)
+
+    if (!allowed) {
+      const { data: chef } = await supabase
+        .from('chefs').select('user_id').eq('id', order.chef_id).maybeSingle()
+      allowed = Boolean(chef && String(chef.user_id) === String(req.userId))
+    }
+
+    if (!allowed && order.driver_id) {
+      const { data: drv } = await supabase
+        .from('drivers').select('user_id').eq('id', order.driver_id).maybeSingle()
+      allowed = Boolean(drv && String(drv.user_id) === String(req.userId))
+    }
+
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+
     const { data, error } = await supabase
       .from('driver_locations')
       .select('*')

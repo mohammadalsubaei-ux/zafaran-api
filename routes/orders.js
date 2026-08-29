@@ -1,5 +1,23 @@
 ﻿const express = require('express')
 const { requireUser, assertChefOwner } = require('../auth')
+
+// هل للمستخدم حق رؤية هذا الطلب؟ العميل، أو صاحب المتجر، أو المندوب المسند
+async function canSeeOrder(userId, order) {
+  if (!order) return false
+  if (String(order.customer_id) === String(userId)) return true
+
+  const { data: chef } = await supabase
+    .from('chefs').select('user_id').eq('id', order.chef_id).maybeSingle()
+  if (chef && String(chef.user_id) === String(userId)) return true
+
+  if (order.driver_id) {
+    const { data: drv } = await supabase
+      .from('drivers').select('user_id').eq('id', order.driver_id).maybeSingle()
+    if (drv && String(drv.user_id) === String(userId)) return true
+  }
+
+  return false
+}
 const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
@@ -319,8 +337,12 @@ router.post('/', requireUser, async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/customer/:id
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/customer/:id', async (req, res) => {
+router.get('/customer/:id', requireUser, async (req, res) => {
   try {
+    if (String(req.userId) !== String(req.params.id)) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+
     const { data, error } = await supabase
       .from('orders')
       .select(`*, order_items(*), chefs(*, users(full_name, gender))`)
@@ -337,8 +359,11 @@ router.get('/customer/:id', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/chef/:id
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/chef/:id', async (req, res) => {
+router.get('/chef/:id', requireUser, async (req, res) => {
   try {
+    // سجل طلبات المتجر يكشف دخله وعملاءه — لصاحبه وحده
+    if (!(await assertChefOwner(req, res, req.params.id))) return
+
     const { data, error } = await supabase
       .from('orders')
       .select(`*, order_items(*), users(full_name, phone)`)
@@ -355,8 +380,20 @@ router.get('/chef/:id', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders?status=ready
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/', async (req, res) => {
+router.get('/', requireUser, async (req, res) => {
   try {
+    // قائمة الطلبات المتاحة للالتقاط — للمندوبين الموثّقين وحدهم.
+    // كانت مفتوحة تماماً فتكشف كل طلبات المنصة بأسماء العملاء وأرقامهم.
+    const { data: driver } = await supabase
+      .from('drivers')
+      .select('id, is_verified')
+      .eq('user_id', req.userId)
+      .maybeSingle()
+
+    if (!driver || !driver.is_verified) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+
     const { status } = req.query
     let query = supabase
       .from('orders')
@@ -370,7 +407,23 @@ router.get('/', async (req, res) => {
 
     const { data, error } = await query
     if (error) throw error
-    res.json({ success: true, data })
+
+    // المندوب لا يرى قيمة الطلب الكاملة أبداً (قرار خصوصية محسوم)،
+    // ولا يرى اسم العميل ورقمه إلا بعد أن يُسند الطلب إليه — فهو يحتاجهما للتسليم.
+    const trimmed = (data || []).map(o => {
+      const mine = String(o.driver_id || '') === String(driver.id)
+
+      return {
+        ...o,
+        users: mine ? o.users : undefined,
+        subtotal: undefined,
+        platform_fee: undefined,
+        chef_share: undefined,
+        discount_amount: undefined
+      }
+    })
+
+    res.json({ success: true, data: trimmed })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
@@ -379,7 +432,7 @@ router.get('/', async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/:id
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireUser, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('orders')
@@ -388,6 +441,12 @@ router.get('/:id', async (req, res) => {
       .single()
 
     if (error) throw error
+
+    // الطلب يحمل اسم العميل ورقمه وعنوانه — لا يراه إلا أطرافه الثلاثة
+    if (!(await canSeeOrder(req.userId, data))) {
+      return res.status(403).json({ success: false, message: 'غير مصرح بعرض هذا الطلب' })
+    }
+
     res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })

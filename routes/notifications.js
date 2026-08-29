@@ -1,11 +1,14 @@
 const express = require('express')
+const { requireUser, assertSelf } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /notifications/:user_id — كل إشعارات المستخدم (الأحدث أول)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.get('/:user_id', async (req, res) => {
+router.get('/:user_id', requireUser, async (req, res) => {
+  if (!assertSelf(req, res, req.params.user_id)) return
+
   try {
     const { data, error } = await supabase
       .from('notifications')
