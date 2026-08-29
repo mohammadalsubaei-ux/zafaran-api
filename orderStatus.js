@@ -112,6 +112,23 @@ async function applyStatusChange(order, status, opts = {}) {
 
   // ━━━ عند الإلغاء: تحرير المندوب المرتبط وإشعار الأطراف ━━━
   if (status === 'cancelled') {
+    // العدّاد يزيد عند الطلب ولم يكن ينقص عند الإلغاء — فينتهي عرض
+    // بحد 100 عند 70 استخدامًا حقيقيًا، ويدفع المتجر ثمن ما لم يُستهلك.
+    if (updated?.offer_id) {
+      const { data: offer } = await supabase
+        .from('offers')
+        .select('usage_count')
+        .eq('id', updated.offer_id)
+        .maybeSingle()
+
+      if (offer && Number(offer.usage_count) > 0) {
+        await supabase
+          .from('offers')
+          .update({ usage_count: Number(offer.usage_count) - 1 })
+          .eq('id', updated.offer_id)
+      }
+    }
+
     if (order.driver_id) {
       const { data: driver } = await supabase
         .from('drivers')

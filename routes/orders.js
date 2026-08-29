@@ -94,26 +94,6 @@ router.post('/', requireUser, async (req, res) => {
     if (!customer_id || !chef_id) {
       return res.status(400).json({ success: false, message: 'بيانات العميل أو الشيف ناقصة' })
 
-
-    // المتجر قد يُغلق بعد أن يضيف العميل للسلة — الخادم كان يقبل الطلب
-    // فيصل صاحب المتجر طلب وهو مغلق ولا يعلم.
-    const { data: chefRow, error: chefRowErr } = await supabase
-      .from('chefs')
-      .select('id, status')
-      .eq('id', chef_id)
-      .maybeSingle()
-
-    if (chefRowErr || !chefRow) {
-      return res.status(404).json({ success: false, message: 'المتجر غير موجود' })
-    }
-
-    if (chefRow.status === 'closed') {
-      return res.status(400).json({
-        success: false,
-        code: 'STORE_CLOSED',
-        message: 'المتجر أغلق للأسف — جرّب متجراً آخر'
-      })
-    }
     }
 
     // حارس الإيقاف: الحساب الموقوف لا ينشئ طلبات
