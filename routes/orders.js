@@ -440,6 +440,110 @@ router.get('/', requireUser, async (req, res) => {
   }
 })
 
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GET /orders/reorder/:userId — "اطلبها ثانية"
+//
+//  أرخص مصدر طلبات: من طلب مرة يطلب ثانية بضغطة بلا بحث.
+//  نُرجع آخر الطلبات المكتملة، ونتحقق أن المتجر ما زال مفتوحاً
+//  وأن أصنافه ما زالت متاحة — وإلا كانت الضغطة تفتح سلة معطوبة.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+router.get('/reorder/:userId', requireUser, async (req, res) => {
+  try {
+    if (String(req.userId) !== String(req.params.userId)) {
+      return res.status(403).json({ success: false, message: 'غير مصرح' })
+    }
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('id, chef_id, created_at, order_items(menu_item_id, name, price, quantity)')
+      .eq('customer_id', req.params.userId)
+      .eq('status', 'delivered')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (error) throw error
+    if (!orders || orders.length === 0) return res.json({ success: true, data: [] })
+
+    // متجر واحد لكل بطاقة — نأخذ أحدث طلب من كل متجر
+    const seen = new Set()
+    const latest = []
+
+    for (const o of orders) {
+      if (seen.has(o.chef_id)) continue
+      seen.add(o.chef_id)
+      latest.push(o)
+      if (latest.length >= 6) break
+    }
+
+    const chefIds = latest.map(o => o.chef_id)
+
+    const { data: chefs } = await supabase
+      .from('chefs')
+      .select('id, city, status, is_verified, rating_avg, users(full_name)')
+      .in('id', chefIds)
+
+    const chefMap = {}
+    for (const ch of chefs || []) chefMap[ch.id] = ch
+
+    // حالة الأصناف الآن — الاسم والسعر قد تغيّرا منذ الطلب
+    const itemIds = latest.flatMap(o => (o.order_items || []).map(i => i.menu_item_id)).filter(Boolean)
+
+    let itemMap = {}
+    if (itemIds.length > 0) {
+      const { data: items } = await supabase
+        .from('menu_items')
+        .select('id, name, price, status, image_url')
+        .in('id', itemIds)
+
+      for (const it of items || []) itemMap[it.id] = it
+    }
+
+    const data = latest
+      .map(o => {
+        const chef = chefMap[o.chef_id]
+        if (!chef || !chef.is_verified) return null
+
+        const items = (o.order_items || [])
+          .map(line => {
+            const live = itemMap[line.menu_item_id]
+            if (!live || live.status === 'unavailable') return null
+
+            return {
+              menu_item_id: line.menu_item_id,
+              name: live.name,
+              price: Number(live.price),
+              image_url: live.image_url,
+              quantity: Number(line.quantity) || 1,
+              // السعر قد يكون تغيّر منذ الطلب السابق — نخبر العميل بدل مفاجأته
+              price_changed: Number(live.price) !== Number(line.price)
+            }
+          })
+          .filter(Boolean)
+
+        // لا صنف متاح = لا فائدة من البطاقة
+        if (items.length === 0) return null
+
+        return {
+          order_id: o.id,
+          chef_id: o.chef_id,
+          chef_name: chef.users?.full_name || 'متجر',
+          chef_city: chef.city || null,
+          chef_status: chef.status || 'open',
+          rating_avg: chef.rating_avg,
+          ordered_at: o.created_at,
+          items,
+          total: items.reduce((sum, i) => sum + i.price * i.quantity, 0)
+        }
+      })
+      .filter(Boolean)
+
+    res.json({ success: true, data })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
+  }
+})
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /orders/:id
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
