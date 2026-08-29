@@ -343,11 +343,16 @@ router.get('/customer/:id', requireUser, async (req, res) => {
       return res.status(403).json({ success: false, message: 'غير مصرح' })
     }
 
+    // بلا حد كان يُرجع كل الطلبات بأصنافها — يبطئ الشاشة ويثقل الخادم مع النمو
+    const limit  = Math.min(Number(req.query.limit) || 30, 100)
+    const offset = Math.max(Number(req.query.offset) || 0, 0)
+
     const { data, error } = await supabase
       .from('orders')
       .select(`*, order_items(*), chefs(*, users(full_name, gender))`)
       .eq('customer_id', req.params.id)
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
     if (error) throw error
     res.json({ success: true, data })
@@ -364,11 +369,15 @@ router.get('/chef/:id', requireUser, async (req, res) => {
     // سجل طلبات المتجر يكشف دخله وعملاءه — لصاحبه وحده
     if (!(await assertChefOwner(req, res, req.params.id))) return
 
+    const limit  = Math.min(Number(req.query.limit) || 30, 100)
+    const offset = Math.max(Number(req.query.offset) || 0, 0)
+
     const { data, error } = await supabase
       .from('orders')
       .select(`*, order_items(*), users(full_name, phone)`)
       .eq('chef_id', req.params.id)
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
     if (error) throw error
     res.json({ success: true, data })
@@ -399,6 +408,7 @@ router.get('/', requireUser, async (req, res) => {
       .from('orders')
       .select(`*, order_items(*), users(full_name, phone)`)
       .order('created_at', { ascending: false })
+      .limit(Math.min(Number(req.query.limit) || 50, 100))
 
     if (status) query = query.eq('status', status)
 
