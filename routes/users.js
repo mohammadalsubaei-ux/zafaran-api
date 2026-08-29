@@ -419,9 +419,17 @@ router.post('/:id/delete', requireUser, async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/push-token', requireUser, async (req, res) => {
   try {
-    const { user_id, token, platform } = req.body
-    if (!user_id || !token)
-      return res.status(400).json({ success: false, message: 'user_id و token مطلوبان' })
+    const { token, platform } = req.body
+    if (!token)
+      return res.status(400).json({ success: false, message: 'token مطلوب' })
+
+    // الهوية من الجلسة لا من الجسم — بلا هذا يسجّل أي أحد رمز جهازه
+    // تحت حساب غيره ويستقبل كل إشعاراته
+    const user_id = req.userId
+
+    // الرمز الواحد يخص جهازاً واحداً — إن كان مسجّلاً لحساب آخر
+    // (جهاز انتقل بين مستخدمين) ننقله بدل أن نكرّره
+    await supabase.from('push_tokens').delete().eq('token', token).neq('user_id', user_id)
 
     const { error } = await supabase
       .from('push_tokens')
