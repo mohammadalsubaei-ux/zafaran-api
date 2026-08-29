@@ -357,7 +357,18 @@ router.post("/:userId/withdraw", requireUser, async (req, res) => {
       .select()
       .single()
 
-    if (error) throw error
+    // الفحص أعلاه لا يمنع طلبين متزامنين — الفهرس الفريد بالقاعدة هو المانع الحقيقي:
+    //   create unique index withdrawals_one_pending_per_user
+    //   on withdrawals (user_id) where status = 'pending';
+    if (error) {
+      if (String(error.code) === "23505") {
+        return res.status(409).json({
+          success: false,
+          message: "لديك طلب سحب قيد المراجعة — انتظر معالجته أولا"
+        })
+      }
+      throw error
+    }
 
     await notifyUser(
       userId,
