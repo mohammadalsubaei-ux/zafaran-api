@@ -105,20 +105,15 @@ app.get('/api/health', (req, res) => res.json({ success: true, service: 'zafaran
 
 // ── Health Check ──
 app.get('/', (req, res) => {
-  res.json({ app: 'زعفران API', version: '1.0.0', status: '🟢 شغّال' })
+  res.json({ app: 'زعفران API', version: '1.0.0', status: 'شغّال' })
 })
 
-// ── Error Handler ──
-app.use((err, req, res, next) => {
-  console.error(err.stack)
-  res.status(500).json({ success: false, message: 'خطأ في السيرفر' })
-})
-
-// ── Start ──
-const PORT = process.env.PORT || 3000
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  مُعقِّم الأخطاء — رسائل قواعد البيانات تكشف أسماء الجداول والأعمدة.
 //  نسجّلها في السجل ونرسل رسالة عامة للعميل.
+//
+//  معالج واحد فقط: Express يستدعي أول معالج أخطاء يجده ويتجاهل ما بعده،
+//  وكان هنا معالجان فالثاني لا يُستدعى أبداً.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 app.use((err, req, res, next) => {
   console.error('[error]', req.method, req.path, err?.message)
@@ -126,6 +121,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: 'حدث خطأ غير متوقع — حاول مرة ثانية' })
 })
 
+// ── Start ──
+const PORT = process.env.PORT || 3000
+
 app.listen(PORT, () => {
-  console.log(`\n🍲 زعفران API شغّال على http://localhost:${PORT}\n`)
+  console.log(`\nزعفران API شغّال على http://localhost:${PORT}\n`)
 })
