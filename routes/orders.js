@@ -435,9 +435,16 @@ router.get('/', requireUser, async (req, res) => {
         ...o,
         users: mine ? o.users : undefined,
         subtotal: undefined,
+        total: undefined,
         platform_fee: undefined,
         chef_share: undefined,
-        discount_amount: undefined
+        discount_amount: undefined,
+        // الأصناف بأسمائها وكمياتها فقط — أسعار السطور تكشف قيمة الطلب بالجمع
+        order_items: (o.order_items || []).map(it => ({
+          id: it.id,
+          name: it.name,
+          quantity: it.quantity
+        }))
       }
     })
 

@@ -65,7 +65,24 @@ router.get('/:id/orders', requireUser, async (req, res) => {
       .eq('driver_id', req.params.id)
       .order('created_at', { ascending: false })
     if (error) throw error
-    res.json({ success: true, data })
+
+    // المندوب لا يرى قيمة الطلب أبداً — نصيبه والعنوان فقط (قرار خصوصية محسوم).
+    // اسم العميل ورقمه يبقيان: الطلب مُسند إليه هنا وهو يحتاجهما للتسليم.
+    const trimmed = (data || []).map(o => ({
+      ...o,
+      subtotal: undefined,
+      total: undefined,
+      platform_fee: undefined,
+      chef_share: undefined,
+      discount_amount: undefined,
+      order_items: (o.order_items || []).map(it => ({
+        id: it.id,
+        name: it.name,
+        quantity: it.quantity
+      }))
+    }))
+
+    res.json({ success: true, data: trimmed })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
