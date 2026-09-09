@@ -3,6 +3,7 @@ const { issueSession, revokeSession, requireUser, assertSelf, rateLimit } = requ
 const router  = express.Router()
 const supabase = require('../supabase')
 const crypto = require('crypto')
+const otp = require('../otp')
 
 // نفس تقنية تشفير الأدمن — scrypt بملح عشوائي لكل مستخدم
 function hashPassword(password, salt) {
@@ -632,6 +633,163 @@ router.post('/phone-auth', rateLimit({ max: 20 }), async (req, res) => {
     res.status(201).json({ success: true, data: { ...created, token }, is_new: true })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام التحقق — حاول مرة ثانية' })
+  }
+})
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  الدخول والتسجيل برمز الجوال — عبر Authentica (يستبدل phone-auth)
+//
+//  الخادم يرسل الرمز ويتحقق منه بنفسه؛ التطبيق لا يثبت شيئاً.
+//
+//  POST /users/otp/send      { phone, method?: 'sms'|'whatsapp' }
+//  POST /users/otp/verify    { phone, otp, role?, city? }
+//     - حساب موجود → جلسة
+//     - رقم جديد   → { needs_profile: true, registration_token }
+//  POST /users/otp/register  { registration_token, full_name, role?, city? }
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function stripSecrets(u) {
+  delete u.password_hash
+  delete u.password_salt
+  return u
+}
+
+async function createAccount(phone, full_name, role, city) {
+  const { data: created, error: createErr } = await supabase
+    .from('users')
+    .insert({ phone, full_name, role })
+    .select()
+    .single()
+
+  if (createErr) throw createErr
+
+  if (role === 'chef') {
+    const { error: chefErr } = await supabase
+      .from('chefs')
+      .insert({ user_id: created.id, city: city || null, status: 'closed', is_verified: false })
+    if (chefErr) {
+      await supabase.from('users').delete().eq('id', created.id)
+      return { error: 'تعذر إنشاء ملف المتجر' }
+    }
+  }
+
+  if (role === 'driver') {
+    const { error: drvErr } = await supabase
+      .from('drivers')
+      .insert({ user_id: created.id, is_available: false, is_verified: false })
+    if (drvErr) {
+      await supabase.from('users').delete().eq('id', created.id)
+      return { error: 'تعذر إنشاء ملف المندوب' }
+    }
+  }
+
+  return { user: stripSecrets(created) }
+}
+
+router.post('/otp/send', rateLimit({ max: 10 }), async (req, res) => {
+  try {
+    if (!otp.isConfigured()) {
+      return res.status(500).json({ success: false, message: 'التحقق بالجوال غير مهيأ على الخادم' })
+    }
+
+    const phone = otp.normalizeLocal(req.body?.phone)
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'اكتب رقم جوالك هكذا: 05xxxxxxxx' })
+    }
+
+    if (!otp.phoneAllowed(phone)) {
+      return res.status(429).json({ success: false, message: 'أرسلنا لهذا الرقم عدة مرات — انتظر 10 دقائق' })
+    }
+
+    const method = req.body?.method === 'whatsapp' ? 'whatsapp' : 'sms'
+    const r = await otp.sendOtp(phone, method)
+
+    if (!r.ok) return res.status(502).json({ success: false, message: r.message })
+    res.json({ success: true, method })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إرسال الرمز — حاول مرة ثانية' })
+  }
+})
+
+router.post('/otp/verify', rateLimit({ max: 15 }), async (req, res) => {
+  try {
+    const phone = otp.normalizeLocal(req.body?.phone)
+    const code  = String(req.body?.otp || '').trim()
+
+    if (!phone || !/^\d{4,8}$/.test(code)) {
+      return res.status(400).json({ success: false, message: 'الرمز غير صحيح' })
+    }
+
+    const verified = await otp.verifyOtp(phone, code)
+    if (!verified) {
+      return res.status(401).json({ success: false, message: 'الرمز غير صحيح أو منتهي — تأكد منه أو أعد الإرسال' })
+    }
+
+    const { data: existing } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', phone)
+      .maybeSingle()
+
+    if (existing) {
+      if (existing.deleted_at) {
+        return res.status(403).json({ success: false, message: 'هذا الحساب محذوف' })
+      }
+      const token = await issueSession(existing.id)
+      return res.json({ success: true, data: { ...stripSecrets(existing), token }, is_new: false })
+    }
+
+    // رقم جديد — التطبيق يعرض شاشة الاسم ثم يستدعي /otp/register بالتذكرة
+    return res.json({
+      success: true,
+      needs_profile: true,
+      phone,
+      registration_token: otp.issueTicket(phone),
+    })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إتمام التحقق — حاول مرة ثانية' })
+  }
+})
+
+router.post('/otp/register', rateLimit({ max: 10 }), async (req, res) => {
+  try {
+    const { registration_token, full_name, role = 'customer', city } = req.body || {}
+
+    const phone = otp.readTicket(registration_token)
+    if (!phone) {
+      return res.status(401).json({ success: false, code: 'TICKET_EXPIRED', message: 'انتهت مهلة التسجيل — أعد إدخال رقمك' })
+    }
+
+    const name = String(full_name || '').trim()
+    if (name.length < 3) {
+      return res.status(400).json({ success: false, message: 'اكتب اسمك الكامل' })
+    }
+
+    const safeRole = ['customer', 'chef', 'driver'].includes(role) ? role : 'customer'
+
+    // احتياط: لو سُجّل الرقم في الأثناء نُدخله بدل تكراره
+    const { data: existing } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', phone)
+      .maybeSingle()
+
+    if (existing) {
+      if (existing.deleted_at) {
+        return res.status(403).json({ success: false, message: 'هذا الحساب محذوف' })
+      }
+      const token = await issueSession(existing.id)
+      return res.json({ success: true, data: { ...stripSecrets(existing), token }, is_new: false })
+    }
+
+    const r = await createAccount(phone, name, safeRole, city)
+    if (r.error) return res.status(500).json({ success: false, message: r.error })
+
+    const token = await issueSession(r.user.id)
+    res.status(201).json({ success: true, data: { ...r.user, token }, is_new: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'تعذر إكمال التسجيل — حاول مرة ثانية' })
   }
 })
 
