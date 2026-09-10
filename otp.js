@@ -89,9 +89,10 @@ async function verifyOtp(local, otp) {
   const r = await call('/api/v2/verify-otp', { phone: toE164(local), otp: String(otp) })
   if (!r.ok || !r.json) return false
 
-  // الوثائق تعد بـ{ verified: true } — نقبل أيضاً صيغة data.verified احتياطاً.
-  // success وحده لا يكفي: قد يعني "طُلب التحقق" لا "الرمز صحيح".
-  return r.json.verified === true || r.json?.data?.verified === true
+  // الرد الفعلي (اختبار 10 سبتمبر): الرفض يرجع 422 مع { status: false, message: "Failed to verify OTP" }.
+  // فالنجاح = رد 2xx مع status/verified/success صحيحة — أي صيغة منها تكفي لأن الفشل لا يمر بـ2xx.
+  const j = r.json
+  return j.status === true || j.verified === true || j.success === true || j?.data?.verified === true
 }
 
 // ━━ تذكرة التسجيل ━━
