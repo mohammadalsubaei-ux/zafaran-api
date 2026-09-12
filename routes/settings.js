@@ -15,6 +15,7 @@ const PUBLIC_KEYS = [
   'update_required',       // هل التحديث إجباري (اختياري مستقبلاً)
   'bank_transfer_iban',    // آيبان المنصة — يظهر للعميل عند اختيار التحويل البنكي
   'bank_transfer_name',    // اسم صاحب الحساب — البنوك ترفض التحويل إن لم يطابق
+  'online_payments_enabled', // "true" يُظهر مدى/Apple Pay في التطبيق — يُشغَّل بعد جهوزية البوابة وPAYMENT_GATEWAY في Railway
 ]
 
 router.get('/:key', async (req, res) => {
