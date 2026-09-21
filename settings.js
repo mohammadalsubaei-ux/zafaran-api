@@ -35,4 +35,25 @@ async function getSettings() {
   }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  مفتاح التوصيل — delivery_enabled في app_settings
+//  "true" فقط يشغّل التوصيل والمناديب. غياب الصف أو أي قيمة أخرى = مطفأ (استلام فقط).
+//  القيمة نصية، لذلك لا تمر عبر getSettings الرقمية أعلاه.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function isDeliveryEnabled() {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'delivery_enabled')
+      .maybeSingle()
+    if (error || !data) return false
+    return String(data.value || '').trim().toLowerCase() === 'true'
+  } catch (err) {
+    console.error('isDeliveryEnabled failed, treating as disabled:', err.message)
+    return false
+  }
+}
+
 module.exports = getSettings
+module.exports.isDeliveryEnabled = isDeliveryEnabled

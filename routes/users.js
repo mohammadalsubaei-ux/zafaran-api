@@ -2,6 +2,7 @@ const express = require('express')
 const { issueSession, revokeSession, requireUser, assertSelf, rateLimit } = require('../auth')
 const router  = express.Router()
 const supabase = require('../supabase')
+const getSettings = require('../settings')
 const crypto = require('crypto')
 const otp = require('../otp')
 
@@ -767,6 +768,11 @@ router.post('/otp/register', rateLimit({ max: 10 }), async (req, res) => {
     }
 
     const safeRole = ['customer', 'chef', 'driver'].includes(role) ? role : 'customer'
+
+    // تسجيل المناديب متوقف ما دام التوصيل مطفأ (delivery_enabled)
+    if (safeRole === 'driver' && !(await getSettings.isDeliveryEnabled())) {
+      return res.status(400).json({ success: false, code: 'DELIVERY_DISABLED', message: 'تسجيل المناديب غير متاح حالياً' })
+    }
 
     // احتياط: لو سُجّل الرقم في الأثناء نُدخله بدل تكراره
     const { data: existing } = await supabase

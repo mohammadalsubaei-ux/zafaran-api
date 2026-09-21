@@ -1,4 +1,4 @@
-﻿const express = require('express')
+const express = require('express')
 const { requireUser, assertChefOwner } = require('../auth')
 
 // هل للمستخدم حق رؤية هذا الطلب؟ العميل، أو صاحب المتجر، أو المندوب المسند
@@ -220,6 +220,16 @@ router.post('/', requireUser, async (req, res) => {
     discountTotal = parseFloat(discountTotal.toFixed(2))
 
     const isPickup = delivery_address === 'استلام شخصي'
+
+    // حارس التوصيل: والمفتاح مطفأ لا يُقبل إلا الاستلام الشخصي،
+    // حتى لو أُرسل الطلب من نسخة قديمة أو من خارج التطبيق.
+    if (!isPickup && !(await getSettings.isDeliveryEnabled())) {
+      return res.status(400).json({
+        success: false,
+        code: 'DELIVERY_DISABLED',
+        message: 'التوصيل غير متاح حالياً — اختر الاستلام من المتجر'
+      })
+    }
 
     // إعدادات المنصة الحية (النِّسب والرسوم من لوحة الأدمن)
     const s = await getSettings()
