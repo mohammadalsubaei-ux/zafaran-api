@@ -23,6 +23,7 @@ function generateToken() {
 }
 
 // الجلسات تُخزَّن كبصمة sha256 لا كنص صريح: تسرّب جدول admin_sessions لا يعطي دخولاً
+// (الجلسات القديمة المخزنة كنص صريح تتوقف — الأدمن يسجّل دخوله مرة واحدة بعد التحديث)
 function tokenHash(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex')
 }
@@ -47,24 +48,16 @@ function safeColor(v, fallback) {
   return /^#[0-9a-f]{6}$/i.test(String(v || '')) ? v : fallback
 }
 
-// يبحث بالبصمة أولاً، ثم بالنص الصريح للجلسات القديمة قبل هذا التحديث (تنتهي خلال 24 ساعة)
+// البحث بالبصمة فقط. لا رجوع للنص الصريح: لو قُبل، يستطيع من يملك نسخة مسرّبة من
+// الجدول إرسال البصمة نفسها كرمز. الثمن: تسجيل دخول الأدمن مرة واحدة بعد هذا التحديث.
 async function findAdminSession(token) {
   const hashed = tokenHash(token)
-  const { data: byHash } = await supabase
+  const { data: session } = await supabase
     .from('admin_sessions')
     .select('admin_id, expires_at')
     .eq('token', hashed)
     .maybeSingle()
-  if (byHash) return { session: byHash, stored: hashed }
-
-  const { data: legacy } = await supabase
-    .from('admin_sessions')
-    .select('admin_id, expires_at')
-    .eq('token', token)
-    .maybeSingle()
-  if (legacy) return { session: legacy, stored: token }
-
-  return { session: null, stored: null }
+  return session ? { session, stored: hashed } : { session: null, stored: null }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
