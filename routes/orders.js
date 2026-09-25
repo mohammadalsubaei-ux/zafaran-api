@@ -23,6 +23,7 @@ const supabase = require('../supabase')
 const notifyUser = require('../notify')
 const getSettings = require('../settings')
 const { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
+const { offerUsageAdd } = require('../atomic')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  حساب المسافة بين نقطتين (كم) — Haversine
@@ -341,11 +342,7 @@ router.post('/', requireUser, async (req, res) => {
     if (appliedOfferId) {
       const used = usableOffers.find(o => o.id === appliedOfferId)
       if (used) {
-        supabase
-          .from('offers')
-          .update({ usage_count: Number(used.usage_count || 0) + 1 })
-          .eq('id', appliedOfferId)
-          .then(() => {}, () => {})
+        offerUsageAdd(appliedOfferId, 1, used.usage_count).catch(() => {})
       }
     }
 
@@ -681,6 +678,9 @@ router.patch('/:id/status', requireUser, async (req, res) => {
     const updated = await applyStatusChange(order, status, { cancel_reason, cancelled_by: 'chef' })
     res.json({ success: true, data: updated })
   } catch (err) {
+    if (err && err.code === 'STATUS_CONFLICT') {
+      return res.status(409).json({ success: false, message: err.message })
+    }
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
@@ -690,10 +690,8 @@ router.patch('/:id/status', requireUser, async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/:id/renotify-drivers', requireUser, async (req, res) => {
   try {
-    const { user_id } = req.body
-    if (!user_id) {
-      return res.status(401).json({ success: false, message: 'التحقق من الهوية مطلوب' })
-    }
+    // الهوية من الجلسة — user_id في الجسم كان يُصدَّق كما هو
+    const user_id = req.userId
 
     const order = await getOrderCore(req.params.id)
     if (!order) {

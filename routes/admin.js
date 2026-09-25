@@ -4,6 +4,7 @@ const { rateLimit } = require('../auth')
 const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
+const { walletAdd, walletWithdraw } = require('../atomic')
 const notifyUser = require('../notify')
 const { STATUS_AR, TERMINAL_STATUSES, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 
@@ -448,6 +449,9 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
     })
     res.json({ success: true, data: updated })
   } catch (err) {
+    if (err && err.code === 'STATUS_CONFLICT') {
+      return res.status(409).json({ success: false, message: err.message })
+    }
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
@@ -946,14 +950,12 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
         return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح (' + available.toFixed(2) + ') أقل من مبلغ الطلب' })
       }
 
-      const { error: walletErr } = await supabase
-        .from('wallets')
-        .update({
-          available_balance: available - Number(w.amount),
-          balance: Number(wallet.balance || 0) - Number(w.amount)
-        })
-        .eq('id', wallet.id)
-      if (walletErr) throw walletErr
+      // خصم مشروط بكفاية الرصيد في خطوة واحدة (لا يضيع تحديث أرباح وصل في الأثناء)
+      const deducted = await walletWithdraw(wallet, Number(w.amount))
+      if (!deducted) {
+        await release()
+        return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح أقل من مبلغ الطلب' })
+      }
 
       const { error: txErr } = await supabase.from('wallet_transactions').insert({
         user_id: w.user_id,
@@ -965,10 +967,11 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
       })
       if (txErr) {
         // فشل القيد بعد الخصم: نرجع الرصيد كما كان كي لا تختل المحفظة
-        await supabase
-          .from('wallets')
-          .update({ available_balance: available, balance: Number(wallet.balance || 0) })
-          .eq('id', wallet.id)
+        await walletAdd({
+          id: wallet.id,
+          balance: Number(wallet.balance || 0) - Number(w.amount),
+          available_balance: available - Number(w.amount)
+        }, Number(w.amount))
         throw txErr
       }
 

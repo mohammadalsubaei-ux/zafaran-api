@@ -168,9 +168,14 @@ router.post('/:id/delivered/:order_id', requireUser, async (req, res) => {
       .from('orders')
       .update({ status: 'delivered', delivered_at: new Date() })
       .eq('id', order_id)
+      .eq('status', 'delivering')
       .select()
-      .single()
+      .maybeSingle()
     if (updateErr) throw updateErr
+    // ضغطتان متزامنتان على "تم التسليم": الثانية لا تجد الطلب قيد التوصيل
+    if (!updated) {
+      return res.status(409).json({ success: false, message: 'تم تسليم الطلب مسبقاً' })
+    }
     // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
     // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —
     // لا نلمسها هنا إطلاقاً لتجنب العدّ المزدوج
