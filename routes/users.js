@@ -574,10 +574,17 @@ router.post('/otp/verify', rateLimit({ max: 15 }), async (req, res) => {
       return res.status(400).json({ success: false, message: 'الرمز غير صحيح' })
     }
 
+    const lockMins = otp.lockedMinutes(phone)
+    if (lockMins > 0) {
+      return res.status(429).json({ success: false, code: 'OTP_LOCKED', message: `محاولات خاطئة كثيرة — انتظر ${lockMins} دقيقة وحاول مرة ثانية` })
+    }
+
     const verified = await otp.verifyOtp(phone, code)
     if (!verified) {
+      otp.recordFailure(phone)
       return res.status(401).json({ success: false, message: 'الرمز غير صحيح أو منتهي — تأكد منه أو أعد الإرسال' })
     }
+    otp.clearFailures(phone)
 
     const { data: existing } = await supabase
       .from('users')
