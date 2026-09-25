@@ -43,13 +43,16 @@ router.get('/:id', async (req, res) => {
       .neq('status', 'unavailable')
       .order('category')
 
-    const name    = esc(chef.users?.full_name || 'متجر زعفران')
+    const rawName = chef.users?.full_name || 'متجر زعفران'
+    const name    = esc(rawName)
     const avatar  = esc(chef.users?.avatar_url || '')
     const st      = STATUS_LABEL[chef.status] || STATUS_LABEL.open
     const rating  = chef.rating_avg ? Number(chef.rating_avg).toFixed(1) : null
     const area    = [chef.city, chef.neighborhood].filter(Boolean).map(esc).join(' — ')
     const items   = Array.isArray(menu) ? menu : []
-    const ogImage = avatar || (items.find(i => i.image_url)?.image_url || '')
+    // قيم خام لوسوم og — pageShell يهرّبها بنفسه (كانت تُهرَّب مرتين فيظهر &amp;amp;)
+    const rawArea = [chef.city, chef.neighborhood].filter(Boolean).join(' — ')
+    const ogImage = (chef.users?.avatar_url || '') || (items.find(i => i.image_url)?.image_url || '')
 
     const menuHtml = items.length
       ? items.map(i => `
@@ -88,11 +91,11 @@ router.get('/:id', async (req, res) => {
         </div>
       </div>`
 
-    res.send(pageShell(`${name} | زعفران`, body, {
-      title: `${name} على زعفران`,
-      desc: `تصفح قائمة ${name}${area ? ' في ' + area : ''} واطلب عبر تطبيق زعفران`,
+    res.send(pageShell(`${rawName} | زعفران`, body, {
+      title: `${rawName} على زعفران`,
+      desc: `تصفح قائمة ${rawName}${rawArea ? ' في ' + rawArea : ''} واطلب عبر تطبيق زعفران`,
       image: ogImage,
-      url: `${req.protocol}://${req.get('host')}/store/${esc(chef.id)}`,
+      url: `${req.protocol}://${req.get('host')}/store/${chef.id}`,
     }))
   } catch (err) {
     res.status(500).send(pageShell('خطأ', '<div class="empty">حدث خطأ مؤقت — جرب لاحقاً.</div>', {}))
