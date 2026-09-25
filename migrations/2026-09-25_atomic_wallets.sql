@@ -51,22 +51,23 @@ GRANT EXECUTE ON FUNCTION public.wallet_add(uuid, numeric)      TO service_role;
 GRANT EXECUTE ON FUNCTION public.wallet_withdraw(uuid, numeric) TO service_role;
 GRANT EXECUTE ON FUNCTION public.offer_usage_add(uuid, integer) TO service_role;
 
--- ٥) قيد أرباح واحد لكل (طلب، مستخدم) — يمنع ترصيد الطلب مرتين عند التسليم المتزامن.
+-- ٥) قيد أرباح واحد لكل (طلب، مستخدم، نوع الربح) — يمنع ترصيد الطلب مرتين عند التسليم المتزامن.
+--    الوصف يميّز ربح المتجر عن ربح التوصيل (لو كان الشخص نفسه الطرفين).
 --    إن وُجدت تكرارات قديمة لا يُنشأ الفهرس، وتظهر رسالة بعددها لمراجعتها يدوياً.
 DO $$
 DECLARE dup_count integer;
 BEGIN
   SELECT COUNT(*) INTO dup_count FROM (
-    SELECT order_id, user_id FROM public.wallet_transactions
+    SELECT order_id, user_id, description FROM public.wallet_transactions
      WHERE type = 'order_earning' AND order_id IS NOT NULL
-     GROUP BY order_id, user_id HAVING COUNT(*) > 1
+     GROUP BY order_id, user_id, description HAVING COUNT(*) > 1
   ) d;
 
   IF dup_count > 0 THEN
     RAISE NOTICE 'wallet_transactions: % duplicated order earnings found — index NOT created. Review them first.', dup_count;
   ELSE
     CREATE UNIQUE INDEX IF NOT EXISTS wallet_tx_one_earning_per_order_user
-      ON public.wallet_transactions (order_id, user_id)
+      ON public.wallet_transactions (order_id, user_id, description)
       WHERE type = 'order_earning' AND order_id IS NOT NULL;
   END IF;
 END $$;

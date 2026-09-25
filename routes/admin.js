@@ -915,6 +915,7 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
       .eq('id', w.id)
       .eq('status', 'pending')
 
+    let keepClaim = false
     try {
       if (action === 'reject') {
         if (!reason || !reason.trim()) {
@@ -967,11 +968,18 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
       })
       if (txErr) {
         // فشل القيد بعد الخصم: نرجع الرصيد كما كان كي لا تختل المحفظة
-        await walletAdd({
-          id: wallet.id,
-          balance: Number(wallet.balance || 0) - Number(w.amount),
-          available_balance: available - Number(w.amount)
-        }, Number(w.amount))
+        try {
+          await walletAdd({
+            id: wallet.id,
+            balance: Number(wallet.balance || 0) - Number(w.amount),
+            available_balance: available - Number(w.amount)
+          }, Number(w.amount))
+        } catch (refundErr) {
+          // فشل الإرجاع: المبلغ مخصوم بلا قيد. نُبقي الطلب محجوزاً كي لا يُعتمد ويُخصم مرة ثانية،
+          // ونسجّل للمراجعة اليدوية
+          keepClaim = true
+          console.error('[withdrawal] refund failed — manual review needed', w.id, refundErr?.message, txErr?.message)
+        }
         throw txErr
       }
 
@@ -988,7 +996,7 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
         { withdrawal_id: w.id }
       )
     } catch (innerErr) {
-      await release()
+      if (!keepClaim) await release()
       throw innerErr
     }
 

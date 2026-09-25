@@ -172,9 +172,9 @@ router.post('/:id/delivered/:order_id', requireUser, async (req, res) => {
       .select()
       .maybeSingle()
     if (updateErr) throw updateErr
-    // ضغطتان متزامنتان على "تم التسليم": الثانية لا تجد الطلب قيد التوصيل
+    // ضغطتان متزامنتان على "تم التسليم" (أو إلغاء من الأدمن في الأثناء): لا نجد الطلب قيد التوصيل
     if (!updated) {
-      return res.status(409).json({ success: false, message: 'تم تسليم الطلب مسبقاً' })
+      return res.status(409).json({ success: false, message: 'تغيّرت حالة الطلب (سُلّم أو أُلغي) — حدّث الصفحة' })
     }
     // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
     // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —

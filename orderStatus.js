@@ -240,14 +240,16 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
     wallet = created
   }
 
-  // درع الازدواج لكل مستخدم على حدة: فحص عام على مستوى الطلب كان يمنع ترصيد المندوب
-  // للأبد إن نجح قيد الشيف وفشل قيده في المحاولة الأولى
+  // درع الازدواج لكل (مستخدم، نوع ربح) على حدة: فحص عام على مستوى الطلب كان يمنع ترصيد
+  // المندوب للأبد إن نجح قيد الشيف وفشل قيده. الوصف يميّز ربح المتجر عن ربح التوصيل
+  // حتى لو كان الشخص نفسه شيفاً ومندوباً للطلب ذاته.
   const { data: already } = await supabase
     .from('wallet_transactions')
     .select('id')
     .eq('order_id', order_id)
     .eq('user_id', user_id)
     .eq('type', 'order_earning')
+    .eq('description', description)
     .limit(1)
   if (already && already.length > 0) return
 

@@ -11,7 +11,8 @@ const supabase = require('./supabase')
 // الدالة غير موجودة أو غير مسموحة — نستخدم البديل
 function rpcUnavailable(error) {
   const code = String(error?.code || '')
-  return code === 'PGRST202' || code === '42883' || code === '42501' ||
+  // 22P02: نوع المعرّف في القاعدة ليس uuid كما تتوقعه الدوال — البديل أسلم من فشل كل ترصيد
+  return code === 'PGRST202' || code === '42883' || code === '42501' || code === '22P02' ||
     /could not find the function/i.test(String(error?.message || ''))
 }
 
