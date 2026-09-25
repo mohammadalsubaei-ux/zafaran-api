@@ -884,6 +884,11 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
 
     // حجز الطلب ذرّياً قبل أي خصم: ضغطتان متزامنتان (أو أدمنان) كانتا تمرّان من فحص
     // pending معاً فيُخصم المبلغ مرتين. التحديث المشروط ينجح لطلب واحد فقط.
+    // حجز حديث (أقل من 10 دقائق) = جلسة أخرى تعالجه الآن؛ الأقدم يُعد حجزاً عالقاً ويُسمح بإعادته
+    const CLAIM_TTL_MS = 10 * 60 * 1000
+    if (w.processed_at && Date.now() - new Date(w.processed_at).getTime() < CLAIM_TTL_MS)
+      return res.status(409).json({ success: false, message: 'الطلب قيد المعالجة من جلسة أخرى' })
+
     const claimedAt = new Date().toISOString()
     // الشرط على القيمة المقروءة نفسها (null عادة) — يعمل أياً كانت القيمة الافتراضية للعمود
     let claimQuery = supabase
