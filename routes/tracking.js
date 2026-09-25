@@ -52,6 +52,22 @@ router.get('/:orderId', requireUser, async (req, res) => {
   }
 })
 
+// المندوب يكتب موقعه على طلب مسند له وقيد التوصيل فقط
+// (كان يكفي أن يملك حساب المندوب، فيزوّر تتبع طلب أي عميل)
+async function isAssignedDelivering(orderId, driverId) {
+  const { data: order } = await supabase
+    .from('orders')
+    .select('driver_id, status')
+    .eq('id', orderId)
+    .maybeSingle()
+  return !!order && String(order.driver_id) === String(driverId) && order.status === 'delivering'
+}
+
+function validCoords(lat, lng) {
+  const la = Number(lat), ln = Number(lng)
+  return Number.isFinite(la) && Number.isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  PATCH /tracking/:orderId — المندوب يرسل موقعه الحالي أثناء التوصيل
 //  body: { driver_id, lat, lng, heading, speed }
@@ -64,8 +80,12 @@ router.patch('/:orderId', requireUser, async (req, res) => {
     if (!(await assertDriverOwner(req, res, driver_id))) return
     const orderId = req.params.orderId
 
-    if (!driver_id || lat == null || lng == null) {
+    if (!driver_id || lat == null || lng == null || !validCoords(lat, lng)) {
       return res.status(400).json({ success: false, message: 'بيانات الموقع ناقصة' })
+    }
+
+    if (!(await isAssignedDelivering(orderId, driver_id))) {
+      return res.status(403).json({ success: false, message: 'هذا الطلب غير مسند لك' })
     }
 
     await supabase.from('driver_locations').upsert({

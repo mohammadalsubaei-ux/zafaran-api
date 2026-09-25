@@ -66,6 +66,13 @@ router.get('/delivery-settings', async (req, res) => {
   })
 })
 
+// خطأ موجّه للمستخدم: رسالته آمنة للعرض (لا تكشف تفاصيل قاعدة البيانات)
+function userError(message) {
+  const err = new Error(message)
+  err.expose = true
+  return err
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /orders — إنشاء طلب جديد
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -124,6 +131,14 @@ router.post('/', requireUser, async (req, res) => {
       return res.status(400).json({ success: false, message: 'السلة فارغة' })
     }
 
+    // الكمية عدد صحيح موجب — كمية سالبة أو كسرية كانت تنتج إجمالياً سالباً وحصة شيف سالبة
+    for (const it of items) {
+      const q = it?.quantity === undefined || it?.quantity === null ? 1 : Number(it.quantity)
+      if (!Number.isInteger(q) || q < 1 || q > 50) {
+        return res.status(400).json({ success: false, message: 'كمية غير صحيحة في السلة' })
+      }
+    }
+
     const itemIds = items.map(i => i.menu_item_id).filter(Boolean)
 
     const { data: menuItems, error: menuErr } = await supabase
@@ -180,18 +195,18 @@ router.post('/', requireUser, async (req, res) => {
     const orderItems = items.map(item => {
       const menuItem = menuItems.find(m => m.id === item.menu_item_id)
 
-      if (!menuItem) throw new Error('أحد المنتجات غير موجود')
+      if (!menuItem) throw userError('أحد المنتجات غير موجود')
 
       // حراس المنتج: الانتماء لنفس المتجر + الحالة الثلاثية
       if (menuItem.chef_id !== chef_id) {
-        throw new Error('أحد المنتجات لا يتبع هذا المتجر')
+        throw userError('أحد المنتجات لا يتبع هذا المتجر')
       }
       const itemStatus = menuItem.status || 'available'
       if (itemStatus === 'unavailable') {
-        throw new Error('"' + menuItem.name + '" غير متوفر حالياً — احذفه من السلة وحاول من جديد')
+        throw userError('"' + menuItem.name + '" غير متوفر حالياً — احذفه من السلة وحاول من جديد')
       }
       if (itemStatus === 'preorder' && !isPreorder) {
-        throw new Error('"' + menuItem.name + '" متاح بالحجز المسبق فقط — اختر وقتاً للتسليم')
+        throw userError('"' + menuItem.name + '" متاح بالحجز المسبق فقط — اختر وقتاً للتسليم')
       }
 
       const quantity  = Number(item.quantity || 1)
@@ -269,7 +284,7 @@ router.post('/', requireUser, async (req, res) => {
 
     // حارس الإحداثيات: طلب توصيل بدون موقع صالح يُرفض
     // (بدونه تُحتسب الرسوم الأساسية مهما بعدت المسافة)
-    if (!isPickup && distance_km == null) {
+    if (!isPickup && (distance_km == null || !Number.isFinite(distance_km))) {
       return res.status(400).json({ success: false, message: 'تعذر تحديد موقع التوصيل — حدد موقعك من جديد ثم أعد المحاولة' })
     }
 
@@ -306,7 +321,7 @@ router.post('/', requireUser, async (req, res) => {
         chef_share,
         driver_share,
         total,
-        payment_method,
+        payment_method: payment_method || 'cash',
         notes,
         discount_amount: discountTotal,
         offer_id: appliedOfferId,
@@ -348,6 +363,10 @@ router.post('/', requireUser, async (req, res) => {
 
     res.status(201).json({ success: true, data: { ...order, items: orderItems } })
   } catch (err) {
+    // أخطاء السلة المفهومة (منتج غير متوفر، حجز مسبق فقط...) تصل للمستخدم بنصها بدل رسالة عامة
+    if (err && err.expose) {
+      return res.status(400).json({ success: false, message: err.message })
+    }
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
@@ -819,11 +838,15 @@ router.patch('/:id/confirm-time', requireUser, async (req, res) => {
 
     const { data: existing, error: fetchErr } = await supabase
       .from('orders')
-      .select('id, order_type, proposed_time, time_negotiation_status, customer_id')
+      .select('id, order_type, proposed_time, time_negotiation_status, customer_id, chef_id')
       .eq('id', req.params.id)
-      .single()
+      .maybeSingle()
 
     if (fetchErr) throw fetchErr
+    if (!existing) return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+
+    // الرد على الوقت لصاحب المتجر فقط (كان أي مستخدم مسجّل يقدر يأكد أو يقترح وقتاً لأي طلب)
+    if (!(await assertChefOwner(req, res, existing.chef_id))) return
 
     if (existing.order_type !== 'preorder') {
       return res.status(400).json({ success: false, message: 'هذا الطلب ليس طلباً مسبقاً' })
@@ -890,11 +913,17 @@ router.patch('/:id/respond-time', requireUser, async (req, res) => {
 
     const { data: existing, error: fetchErr } = await supabase
       .from('orders')
-      .select('id, order_type, confirmed_time, time_negotiation_status, chef_id, chefs(user_id)')
+      .select('id, order_type, confirmed_time, time_negotiation_status, chef_id, customer_id, chefs(user_id)')
       .eq('id', req.params.id)
-      .single()
+      .maybeSingle()
 
     if (fetchErr) throw fetchErr
+    if (!existing) return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+
+    // الرد على اقتراح الشيف لصاحب الطلب فقط (كان أي مستخدم يقدر يلغي حجز غيره)
+    if (String(existing.customer_id) !== String(req.userId)) {
+      return res.status(403).json({ success: false, message: 'غير مصرح بهذا الإجراء' })
+    }
 
     if (existing.time_negotiation_status !== 'chef_countered') {
       return res.status(400).json({ success: false, message: 'لا يوجد اقتراح بديل بانتظار ردك' })

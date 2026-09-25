@@ -185,11 +185,19 @@ router.get("/:userId/compensations", requireUser, async (req, res) => {
 router.post("/:userId/use-credit", requireUser, async (req, res) => {
   if (!assertSelf(req, res, req.params.userId)) return
 
+  // موقوف مؤقتاً: لا يستدعيه التطبيق، وبصيغته الحالية كان يقبل مبالغ غير رقمية،
+  // ويُصرف على طلب أي مستخدم، ولا يُنقص إجمالي الطلب (العميل يدفع كاملاً ويخسر رصيده).
+  // يُعاد تفعيله بعد تصميمه داخل إنشاء الطلب وبعملية ذرّية في قاعدة البيانات.
+  if (process.env.ENABLE_USE_CREDIT !== "true") {
+    return res.status(503).json({ success: false, message: "استخدام رصيد التعويض غير متاح حالياً" })
+  }
+
   try {
     const { userId } = req.params
     const { order_id, amount } = req.body
 
-    if (!order_id || !amount || amount <= 0) {
+    const amountNum = Number(amount)
+    if (!order_id || !Number.isFinite(amountNum) || amountNum <= 0) {
       return res.status(400).json({ success: false, message: "order_id و amount مطلوبان" })
     }
 

@@ -115,7 +115,7 @@
         const d = c.freelance_cert_uploaded_at
           ? new Date(c.freelance_cert_uploaded_at).toLocaleDateString("ar-SA")
           : "";
-        return `<a class="badge badge-green" href="${c.freelance_cert_url}" target="_blank" style="text-decoration:none">عرض${d ? " · " + d : ""}</a>`;
+        return `<a class="badge badge-green" href="${escapeHtml(safeUrl(c.freelance_cert_url))}" rel="noopener noreferrer" target="_blank" style="text-decoration:none">عرض${d ? " · " + d : ""}</a>`;
       }
       const created = c.created_at ? new Date(c.created_at).getTime() : Date.now();
       const daysUsed = Math.floor((Date.now() - created) / 86400000);

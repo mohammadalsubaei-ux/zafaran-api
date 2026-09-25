@@ -57,6 +57,33 @@
       min_withdrawal_amount:    { unit: "ر.س",      toDisplay: (v) => v, toValue: (v) => v, step: "10" },
     };
 
+    // إعدادات نصية أو تشغيل/إيقاف — لا تمر على parseFloat
+    const TEXT_FIELDS = {
+      delivery_enabled:        "bool",
+      online_payments_enabled: "bool",
+      update_required:         "bool",
+      latest_version:          "text",
+      bank_transfer_iban:      "text",
+      bank_transfer_name:      "text",
+    };
+
+    function inputFor(row, cfg) {
+      const kind = TEXT_FIELDS[row.key];
+      const style = "padding:9px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;text-align:center;font-size:15px";
+      if (kind === "bool") {
+        const on = String(row.value).trim().toLowerCase() === "true";
+        return `<select id="in-${escapeHtml(row.key)}" style="width:110px;${style}">
+                  <option value="true" ${on ? "selected" : ""}>مفعّل</option>
+                  <option value="false" ${on ? "" : "selected"}>متوقف</option>
+                </select>`;
+      }
+      if (kind === "text") {
+        return `<input type="text" id="in-${escapeHtml(row.key)}" value="${escapeHtml(row.value ?? "")}" dir="ltr" style="width:220px;${style}" />`;
+      }
+      const display = cfg.toDisplay(parseFloat(row.value));
+      return `<input type="number" id="in-${escapeHtml(row.key)}" value="${escapeHtml(display)}" step="${cfg.step}" min="0" style="width:110px;${style}" />`;
+    }
+
     function round2(n) { return Math.round(n * 100) / 100; }
 
     (async () => {
@@ -79,7 +106,6 @@
       container.className = "";
       container.innerHTML = json.data.map((row) => {
         const cfg = FIELD_CONFIG[row.key] || { unit: "", toDisplay: (v) => v, toValue: (v) => v, step: "any" };
-        const display = cfg.toDisplay(parseFloat(row.value));
         return `
           <div class="stat-card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px;text-align:right">
             <div>
@@ -87,8 +113,7 @@
               <div class="page-sub" style="margin:4px 0 0;font-size:11px;opacity:.6">${escapeHtml(row.key)}</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
-              <input type="number" id="in-${row.key}" value="${display}" step="${cfg.step}" min="0"
-                style="width:110px;padding:9px;border-radius:10px;border:1px solid rgba(240,165,0,.3);background:transparent;color:inherit;text-align:center;font-size:15px" />
+              ${inputFor(row, cfg)}
               <span style="min-width:56px;font-size:13px;opacity:.8">${cfg.unit}</span>
               <button class="btn-primary" id="btn-${row.key}" onclick="saveSetting('${row.key}')">حفظ</button>
               <span id="st-${row.key}" style="min-width:70px;font-size:12px"></span>
@@ -104,8 +129,9 @@
       const btn = document.getElementById("btn-" + key);
       const status = document.getElementById("st-" + key);
 
-      const raw = parseFloat(input.value);
-      if (!isFinite(raw) || raw < 0) {
+      const isText = Boolean(TEXT_FIELDS[key]);
+      const raw = isText ? String(input.value).trim() : parseFloat(input.value);
+      if (isText ? !raw : (!isFinite(raw) || raw < 0)) {
         status.textContent = "قيمة غير صالحة";
         status.style.color = "#E53935";
         return;
@@ -117,7 +143,7 @@
 
       const json = await authFetch("/settings", {
         method: "PATCH",
-        body: JSON.stringify({ key, value: cfg.toValue(raw) }),
+        body: JSON.stringify({ key, value: isText ? raw : cfg.toValue(raw) }),
       });
 
       btn.disabled = false;
