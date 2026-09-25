@@ -22,6 +22,7 @@ const router = express.Router()
 const supabase = require('../supabase')
 const notifyUser = require('../notify')
 const getSettings = require('../settings')
+const gateway = require('../gateway')
 const { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 const { offerUsageAdd } = require('../atomic')
 
@@ -106,7 +107,12 @@ router.post('/', requireUser, async (req, res) => {
 
     // قائمة بيضاء لطرق الدفع — بدونها يمرر أي أحد قيمة غير معروفة
     // فتُسجَّل في الطلب ولا تعرف الإدارة كيف حُصّل المبلغ.
+    // الدفع الإلكتروني يُقبل فقط إذا كانت البوابة مربوطة (PAYMENT_GATEWAY) والإعداد مفعّل من اللوحة
     const ALLOWED_PAYMENT = ['cash', 'bank_transfer']
+    if (['card', 'apple_pay', 'stc_pay'].includes(String(payment_method)) &&
+        gateway.enabled && (await getSettings.isOnlinePaymentsEnabled())) {
+      ALLOWED_PAYMENT.push('card', 'apple_pay', 'stc_pay')
+    }
     if (!ALLOWED_PAYMENT.includes(String(payment_method || 'cash'))) {
       return res.status(400).json({ success: false, message: 'طريقة الدفع غير مدعومة' })
     }

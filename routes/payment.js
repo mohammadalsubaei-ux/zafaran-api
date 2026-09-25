@@ -108,8 +108,10 @@ router.get('/status/:order_id', requireUser, async (req, res) => {
       .update({
         payment_status: 'paid',
         payment_transaction_id: result.transaction_id || order.payment_transaction_id,
+        paid_at: new Date().toISOString(),
       })
       .eq('id', orderId)
+      .neq('payment_status', 'paid')
     if (updErr) throw updErr
 
     res.json({ success: true, data: { paid: true, transaction_id: result.transaction_id || order.payment_transaction_id } })
