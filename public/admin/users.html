@@ -187,7 +187,7 @@
       box.className = "";
       box.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-          <div class="modal-title" style="margin:0">${ROLE_AR[user.role] || user.role}</div>
+          <div class="modal-title" style="margin:0">${escapeHtml(ROLE_AR[user.role] || user.role)}</div>
           ${suspended ? '<span class="badge badge-red">موقوف</span>' : '<span class="badge badge-green">نشط</span>'}
         </div>
 

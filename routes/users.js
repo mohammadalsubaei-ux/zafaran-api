@@ -3,16 +3,7 @@ const { issueSession, revokeSession, requireUser, assertSelf, rateLimit } = requ
 const router  = express.Router()
 const supabase = require('../supabase')
 const getSettings = require('../settings')
-const crypto = require('crypto')
 const otp = require('../otp')
-
-// نفس تقنية تشفير الأدمن — scrypt بملح عشوائي لكل مستخدم
-function hashPassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex')
-}
-function generateSalt() {
-  return crypto.randomBytes(16).toString('hex')
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/register
@@ -20,10 +11,12 @@ function generateSalt() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  مسارا كلمة المرور — معطّلان
 //
-//  التطبيق صار يسجّل ويدخل برمز الجوال (POST /users/phone-auth).
+//  التطبيق صار يسجّل ويدخل برمز الجوال (POST /users/otp/*).
 //  تركهما مفتوحين يعني باباً خلفياً ينشئ حسابات بأرقام غير محققة،
 //  فيُبطل نظام التحقق كله. نبقيهما ليردّا رسالة واضحة بدل 404 غامض
 //  لمن بقي على نسخة قديمة من التطبيق.
+//  (المساران الاحتياطيان _disabled_register/_disabled_login وتغيير
+//  كلمة المرور حُذفت: كانت تسمح بإنشاء حساب ودخول بلا رمز تحقق.)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const LEGACY_AUTH_MESSAGE = 'حدّث التطبيق لآخر نسخة — الدخول صار برمز يصلك على جوالك'
 
@@ -34,109 +27,6 @@ router.post('/register', (req, res) =>
 router.post('/login', (req, res) =>
   res.status(410).json({ success: false, code: 'LEGACY_AUTH', message: LEGACY_AUTH_MESSAGE })
 )
-
-router.post('/_disabled_register', rateLimit({ max: 6 }), async (req, res) => {
-  try {
-    const { phone, full_name, role = 'customer', password } = req.body
-    if (!phone || !full_name)
-      return res.status(400).json({ success: false, message: 'رقم الجوال والاسم مطلوبان' })
-    if (!password || String(password).length < 6)
-      return res.status(400).json({ success: false, message: 'كلمة المرور مطلوبة (6 احرف على الاقل)' })
-
-    const { data: existing } = await supabase
-      .from('users').select('id').eq('phone', phone).single()
-    if (existing)
-      return res.status(400).json({ success: false, message: 'رقم الجوال مسجل مسبقاً' })
-
-    const password_salt = generateSalt()
-    const password_hash = hashPassword(String(password), password_salt)
-
-    const { data, error } = await supabase
-      .from('users').insert({ phone, full_name, role, password_hash, password_salt }).select().single()
-    if (error) throw error
-
-    if (role === 'chef' && req.body.city) {
-      const { error: chefErr } = await supabase.from('chefs').insert({
-        user_id:      data.id,
-        city:         req.body.city,
-        neighborhood: req.body.neighborhood || ''
-      })
-      if (chefErr) {
-        // لا نترك مستخدما يتيما بدون ملف متجر — نحذفه ونرجع الخطأ الحقيقي
-        await supabase.from('users').delete().eq('id', data.id)
-        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف المتجر: ' + chefErr.message })
-      }
-    }
-
-    // مندوب جديد: إنشاء سجله بجدول drivers فوراً
-    // (بدونه لوحة المندوب لا تجد ملفه وتفشل) — يبدأ غير موثّق
-    // وغير متاح حتى يوثّقه الأدمن ويفعّل حالته بنفسه
-    if (role === 'driver') {
-      const { error: driverErr } = await supabase.from('drivers').insert({
-        user_id:          data.id,
-        is_verified:      false,
-        is_available:     false,
-        total_deliveries: 0,
-        total_earnings:   0
-      })
-      if (driverErr) {
-        // لا نترك مستخدما يتيما بدون ملف مندوب — نحذفه ونرجع الخطأ الحقيقي
-        await supabase.from('users').delete().eq('id', data.id)
-        return res.status(500).json({ success: false, message: 'تعذر انشاء ملف المندوب: ' + driverErr.message })
-      }
-    }
-
-    // لا نعيد التجزئة والملح للتطبيق ابدا
-    delete data.password_hash
-    delete data.password_salt
-
-    const token = await issueSession(data.id)
-    res.status(201).json({ success: true, data: { ...data, token } })
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
-  }
-})
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  POST /users/login
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/_disabled_login', rateLimit({ max: 8 }), async (req, res) => {
-  try {
-    const { phone, password } = req.body
-    if (!phone || !password)
-      return res.status(400).json({ success: false, message: 'رقم الجوال وكلمة المرور مطلوبان' })
-
-    const { data, error } = await supabase
-      .from('users').select('*').eq('phone', phone).single()
-    if (error || !data)
-      return res.status(404).json({ success: false, message: 'رقم الجوال غير مسجل' })
-
-    // الحساب المحذوف: رسالة صريحة تفرقه عن الموقوف إدارياً
-    if (data.deleted_at)
-      return res.status(403).json({ success: false, message: 'هذا الحساب محذوف — يمكنك إنشاء حساب جديد' })
-
-    // الحساب الموقوف من الإدارة: رسالة صريحة بدل "غير مسجل" المضللة
-    if (data.is_active === false)
-      return res.status(403).json({ success: false, message: 'حسابك موقوف — للاستفسار تواصل مع دعم زعفران' })
-
-    // حسابات ما قبل نظام كلمة المرور: تعيينها يتم من لوحة الأدمن
-    if (!data.password_hash || !data.password_salt)
-      return res.status(409).json({ success: false, message: 'حسابك يحتاج تعيين كلمة مرور — تواصل مع دعم زعفران' })
-
-    if (hashPassword(String(password), data.password_salt) !== data.password_hash)
-      return res.status(401).json({ success: false, message: 'كلمة المرور غير صحيحة' })
-
-    delete data.password_hash
-    delete data.password_salt
-
-    // رمز الجلسة — الهوية تُثبَت به لا بإرسال user_id في الجسم
-    const token = await issueSession(data.id)
-
-    res.json({ success: true, data: { ...data, token } })
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
-  }
-})
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /users/:id — بيانات المستخدم (بدون أي حقول حساسة)
@@ -463,50 +353,6 @@ router.get('/:id/notifications', requireUser, async (req, res) => {
 })
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  POST /users/:id/change-password — تغيير المستخدم كلمته بنفسه
-//  يتطلب الحالية للتحقق؛ الحسابات القديمة بلا كلمة تعينها مباشرة
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-router.post('/:id/change-password', rateLimit({ max: 6 }), requireUser, async (req, res) => {
-  if (!assertSelf(req, res, req.params.id)) return
-
-  try {
-    const { current_password, new_password } = req.body
-
-    if (!new_password || String(new_password).length < 6)
-      return res.status(400).json({ success: false, message: 'كلمة المرور الجديدة 6 احرف على الاقل' })
-
-    const { data: user } = await supabase
-      .from('users')
-      .select('id, password_hash, password_salt')
-      .eq('id', req.params.id)
-      .single()
-
-    if (!user)
-      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
-
-    if (user.password_hash && user.password_salt) {
-      if (!current_password)
-        return res.status(400).json({ success: false, message: 'ادخل كلمة المرور الحالية' })
-      if (hashPassword(String(current_password), user.password_salt) !== user.password_hash)
-        return res.status(401).json({ success: false, message: 'كلمة المرور الحالية غير صحيحة' })
-    }
-
-    const password_salt = generateSalt()
-    const password_hash = hashPassword(String(new_password), password_salt)
-
-    const { error } = await supabase
-      .from('users')
-      .update({ password_hash, password_salt })
-      .eq('id', user.id)
-
-    if (error) throw error
-    res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
-  }
-})
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  POST /users/logout — إبطال رمز الجلسة الحالي
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/logout', requireUser, async (req, res) => {
@@ -597,15 +443,21 @@ router.post('/phone-auth', rateLimit({ max: 20 }), async (req, res) => {
       return res.status(200).json({ success: true, needs_profile: true, phone })
     }
 
+    // الدور من التطبيق لا يُقبل كما هو — قائمة بيضاء (كان يقبل أي نص، حتى 'admin' أو HTML)
+    const safeRole = ['customer', 'chef', 'driver'].includes(role) ? role : 'customer'
+    if (safeRole === 'driver' && !(await getSettings.isDeliveryEnabled())) {
+      return res.status(400).json({ success: false, code: 'DELIVERY_DISABLED', message: 'تسجيل المناديب غير متاح حالياً' })
+    }
+
     const { data: created, error: createErr } = await supabase
       .from('users')
-      .insert({ phone, full_name: name, role })
+      .insert({ phone, full_name: name, role: safeRole })
       .select()
       .single()
 
     if (createErr) throw createErr
 
-    if (role === 'chef') {
+    if (safeRole === 'chef') {
       const { error: chefErr } = await supabase
         .from('chefs')
         .insert({ user_id: created.id, city: city || null, status: 'closed', is_verified: false })
@@ -616,7 +468,7 @@ router.post('/phone-auth', rateLimit({ max: 20 }), async (req, res) => {
       }
     }
 
-    if (role === 'driver') {
+    if (safeRole === 'driver') {
       const { error: drvErr } = await supabase
         .from('drivers')
         .insert({ user_id: created.id, is_available: false, is_verified: false })

@@ -4,6 +4,7 @@ const { rateLimit } = require('../auth')
 const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
+const { walletAdd, walletWithdraw } = require('../atomic')
 const notifyUser = require('../notify')
 const { STATUS_AR, TERMINAL_STATUSES, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 
@@ -337,6 +338,36 @@ router.patch('/settings', requireAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: 'المفتاح مطلوب' })
     }
 
+    // إعدادات غير رقمية: كانت كلها تمر على parseFloat — فرقم الإصدار "1.0.2" يُحفظ "1"
+    // والآيبان وأزرار التشغيل ترفض تماماً
+    const TEXT_SETTINGS = {
+      delivery_enabled:        v => (v === 'true' || v === 'false') ? v : null,
+      online_payments_enabled: v => (v === 'true' || v === 'false') ? v : null,
+      update_required:         v => (v === 'true' || v === 'false') ? v : null,
+      latest_version:          v => /^\d+(\.\d+){0,3}$/.test(v) ? v : null,
+      bank_transfer_iban:      v => { const c = v.replace(/\s+/g, '').toUpperCase(); return /^SA\d{22}$/.test(c) ? c : null },
+      bank_transfer_name:      v => (v.length >= 2 && v.length <= 100) ? v : null,
+    }
+
+    if (Object.prototype.hasOwnProperty.call(TEXT_SETTINGS, key)) {
+      const clean = TEXT_SETTINGS[key](String(value ?? '').trim())
+      if (clean === null) {
+        return res.status(400).json({ success: false, message: 'قيمة غير صالحة لهذا الإعداد' })
+      }
+
+      const { data, error } = await supabase
+        .from('app_settings')
+        .update({ value: clean, updated_at: new Date().toISOString() })
+        .eq('key', key)
+        .select()
+        .single()
+
+      if (error || !data) {
+        return res.status(404).json({ success: false, message: 'الاعداد غير موجود' })
+      }
+      return res.json({ success: true, data })
+    }
+
     const num = parseFloat(value)
     if (!isFinite(num) || num < 0) {
       return res.status(400).json({ success: false, message: 'القيمة يجب ان تكون رقما موجبا' })
@@ -418,6 +449,9 @@ router.patch('/orders/:id/status', requireAdmin, async (req, res) => {
     })
     res.json({ success: true, data: updated })
   } catch (err) {
+    if (err && err.code === 'STATUS_CONFLICT') {
+      return res.status(409).json({ success: false, message: err.message })
+    }
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
 })
@@ -852,74 +886,119 @@ router.patch('/withdrawals/:id', requireAdmin, async (req, res) => {
     if (w.status !== 'pending')
       return res.status(409).json({ success: false, message: 'الطلب معالج مسبقا (' + w.status + ')' })
 
-    if (action === 'reject') {
-      if (!reason || !reason.trim())
-        return res.status(400).json({ success: false, message: 'سبب الرفض مطلوب — سيصل صاحب الطلب' })
+    // حجز الطلب ذرّياً قبل أي خصم: ضغطتان متزامنتان (أو أدمنان) كانتا تمرّان من فحص
+    // pending معاً فيُخصم المبلغ مرتين. التحديث المشروط ينجح لطلب واحد فقط.
+    // حجز حديث (أقل من 10 دقائق) = جلسة أخرى تعالجه الآن؛ الأقدم يُعد حجزاً عالقاً ويُسمح بإعادته
+    const CLAIM_TTL_MS = 10 * 60 * 1000
+    if (w.processed_at && Date.now() - new Date(w.processed_at).getTime() < CLAIM_TTL_MS)
+      return res.status(409).json({ success: false, message: 'الطلب قيد المعالجة من جلسة أخرى' })
+
+    const claimedAt = new Date().toISOString()
+    // الشرط على القيمة المقروءة نفسها (null عادة) — يعمل أياً كانت القيمة الافتراضية للعمود
+    let claimQuery = supabase
+      .from('withdrawals')
+      .update({ processed_at: claimedAt })
+      .eq('id', w.id)
+      .eq('status', 'pending')
+    claimQuery = w.processed_at == null
+      ? claimQuery.is('processed_at', null)
+      : claimQuery.eq('processed_at', w.processed_at)
+    const { data: claimed, error: claimErr } = await claimQuery.select('id')
+    if (claimErr) throw claimErr
+    if (!claimed || claimed.length === 0)
+      return res.status(409).json({ success: false, message: 'الطلب قيد المعالجة من جلسة أخرى' })
+
+    // فك الحجز إن لم تكتمل العملية، ليعاد المحاولة لاحقاً
+    const release = () => supabase
+      .from('withdrawals')
+      .update({ processed_at: w.processed_at ?? null })
+      .eq('id', w.id)
+      .eq('status', 'pending')
+
+    let keepClaim = false
+    try {
+      if (action === 'reject') {
+        if (!reason || !reason.trim()) {
+          await release()
+          return res.status(400).json({ success: false, message: 'سبب الرفض مطلوب — سيصل صاحب الطلب' })
+        }
+
+        await supabase
+          .from('withdrawals')
+          .update({ status: 'rejected', reject_reason: reason.trim(), processed_at: new Date().toISOString() })
+          .eq('id', w.id)
+
+        await notifyUser(
+          w.user_id,
+          'تم رفض طلب السحب',
+          'طلبك بمبلغ ' + Number(w.amount).toFixed(2) + ' ريال رفض — السبب: ' + reason.trim(),
+          'withdrawal_rejected',
+          { withdrawal_id: w.id }
+        )
+        return res.json({ success: true })
+      }
+
+      // الموافقة: تحقق الرصيد ثم الخصم وتوثيق الحركة
+      const { data: wallet } = await supabase
+        .from('wallets')
+        .select('id, balance, available_balance')
+        .eq('user_id', w.user_id)
+        .maybeSingle()
+
+      const available = Number(wallet?.available_balance || 0)
+      if (!wallet || available < Number(w.amount)) {
+        await release()
+        return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح (' + available.toFixed(2) + ') أقل من مبلغ الطلب' })
+      }
+
+      // خصم مشروط بكفاية الرصيد في خطوة واحدة (لا يضيع تحديث أرباح وصل في الأثناء)
+      const deducted = await walletWithdraw(wallet, Number(w.amount))
+      if (!deducted) {
+        await release()
+        return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح أقل من مبلغ الطلب' })
+      }
+
+      const { error: txErr } = await supabase.from('wallet_transactions').insert({
+        user_id: w.user_id,
+        amount: Number(w.amount),
+        type: 'withdrawal',
+        status: 'completed',
+        description: 'سحب أرباح — تم التحويل',
+        currency: 'SAR'
+      })
+      if (txErr) {
+        // فشل القيد بعد الخصم: نرجع الرصيد كما كان كي لا تختل المحفظة
+        try {
+          await walletAdd({
+            id: wallet.id,
+            balance: Number(wallet.balance || 0) - Number(w.amount),
+            available_balance: available - Number(w.amount)
+          }, Number(w.amount))
+        } catch (refundErr) {
+          // فشل الإرجاع: المبلغ مخصوم بلا قيد. نُبقي الطلب محجوزاً كي لا يُعتمد ويُخصم مرة ثانية،
+          // ونسجّل للمراجعة اليدوية
+          keepClaim = true
+          console.error('[withdrawal] refund failed — manual review needed', w.id, refundErr?.message, txErr?.message)
+        }
+        throw txErr
+      }
 
       await supabase
         .from('withdrawals')
-        .update({ status: 'rejected', reject_reason: reason.trim(), processed_at: new Date().toISOString() })
+        .update({ status: 'approved', processed_at: new Date().toISOString() })
         .eq('id', w.id)
 
       await notifyUser(
         w.user_id,
-        'تم رفض طلب السحب',
-        'طلبك بمبلغ ' + Number(w.amount).toFixed(2) + ' ريال رفض — السبب: ' + reason.trim(),
-        'withdrawal_rejected',
+        'تم تحويل أرباحك',
+        'تم تحويل ' + Number(w.amount).toFixed(2) + ' ريال إلى حسابك — بالتوفيق!',
+        'withdrawal_approved',
         { withdrawal_id: w.id }
       )
-      return res.json({ success: true })
+    } catch (innerErr) {
+      if (!keepClaim) await release()
+      throw innerErr
     }
-
-    // الموافقة: تحقق الرصيد ثم الخصم وتوثيق الحركة
-    const { data: wallet } = await supabase
-      .from('wallets')
-      .select('id, balance, available_balance')
-      .eq('user_id', w.user_id)
-      .maybeSingle()
-
-    const available = Number(wallet?.available_balance || 0)
-    if (!wallet || available < Number(w.amount))
-      return res.status(409).json({ success: false, message: 'رصيد الشيف المتاح (' + available.toFixed(2) + ') أقل من مبلغ الطلب' })
-
-    const { error: walletErr } = await supabase
-      .from('wallets')
-      .update({
-        available_balance: available - Number(w.amount),
-        balance: Number(wallet.balance || 0) - Number(w.amount)
-      })
-      .eq('id', wallet.id)
-    if (walletErr) throw walletErr
-
-    const { error: txErr } = await supabase.from('wallet_transactions').insert({
-      user_id: w.user_id,
-      amount: Number(w.amount),
-      type: 'withdrawal',
-      status: 'completed',
-      description: 'سحب أرباح — تم التحويل',
-      currency: 'SAR'
-    })
-    if (txErr) {
-      // فشل القيد بعد الخصم: نرجع الرصيد كما كان كي لا تختل المحفظة
-      await supabase
-        .from('wallets')
-        .update({ available_balance: available, balance: Number(wallet.balance || 0) })
-        .eq('id', wallet.id)
-      throw txErr
-    }
-
-    await supabase
-      .from('withdrawals')
-      .update({ status: 'approved', processed_at: new Date().toISOString() })
-      .eq('id', w.id)
-
-    await notifyUser(
-      w.user_id,
-      'تم تحويل أرباحك',
-      'تم تحويل ' + Number(w.amount).toFixed(2) + ' ريال إلى حسابك — بالتوفيق!',
-      'withdrawal_approved',
-      { withdrawal_id: w.id }
-    )
 
     res.json({ success: true })
   } catch (err) {

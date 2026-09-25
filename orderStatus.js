@@ -1,5 +1,6 @@
 const supabase = require('./supabase')
 const notifyUser = require('./notify')
+const { walletAdd, offerUsageAdd } = require('./atomic')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  محرك حالات الطلبات — المصدر الوحيد بكل المشروع
@@ -60,14 +61,25 @@ async function applyStatusChange(order, status, opts = {}) {
     updates.cancelled_at = new Date()
   }
 
-  const { data: updated, error } = await supabase
+  // التحديث مشروط بالحالة التي قرأها المستدعي: طلبان متزامنان (إلغاء العميل وقبول الشيف،
+  // أو "تم التسليم" مرتين) كانا ينجحان معاً. الآن ينجح الأول فقط والثاني يرجع 409.
+  let query = supabase
     .from('orders')
     .update(updates)
     .eq('id', order.id)
+  if (order.status) query = query.eq('status', order.status)
+
+  const { data: updated, error } = await query
     .select('*')
-    .single()
+    .maybeSingle()
 
   if (error) throw error
+  if (!updated) {
+    const conflict = new Error('تغيّرت حالة الطلب للتو — حدّث الصفحة وحاول مرة ثانية')
+    conflict.code = 'STATUS_CONFLICT'
+    conflict.expose = true
+    throw conflict
+  }
 
   // ━━━ عند الجاهزية: نداء كل المناديب المتاحين + مهلة دقيقة ━━━
   if (status === 'ready' && order.delivery_address !== 'استلام شخصي') {
@@ -122,10 +134,7 @@ async function applyStatusChange(order, status, opts = {}) {
         .maybeSingle()
 
       if (offer && Number(offer.usage_count) > 0) {
-        await supabase
-          .from('offers')
-          .update({ usage_count: Number(offer.usage_count) - 1 })
-          .eq('id', updated.offer_id)
+        await offerUsageAdd(updated.offer_id, -1, offer.usage_count)
       }
     }
 
@@ -231,6 +240,19 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
     wallet = created
   }
 
+  // درع الازدواج لكل (مستخدم، نوع ربح) على حدة: فحص عام على مستوى الطلب كان يمنع ترصيد
+  // المندوب للأبد إن نجح قيد الشيف وفشل قيده. الوصف يميّز ربح المتجر عن ربح التوصيل
+  // حتى لو كان الشخص نفسه شيفاً ومندوباً للطلب ذاته.
+  const { data: already } = await supabase
+    .from('wallet_transactions')
+    .select('id')
+    .eq('order_id', order_id)
+    .eq('user_id', user_id)
+    .eq('type', 'order_earning')
+    .eq('description', description)
+    .limit(1)
+  if (already && already.length > 0) return
+
   // القيد أولا (بمعرف المحفظة — الجدول يشترطه) ثم الرصيد
   const { data: tx, error: txErr } = await supabase.from('wallet_transactions').insert({
     user_id,
@@ -241,16 +263,15 @@ async function creditWallet(user_id, amount, walletType, description, order_id) 
     description,
     currency: 'SAR'
   }).select('id').single()
-  if (txErr) throw txErr
+  if (txErr) {
+    // 23505 = الفهرس الفريد منع قيداً مكرراً من نداء متزامن — الأرباح رُصدت مسبقاً
+    if (String(txErr.code) === '23505') return
+    throw txErr
+  }
 
-  const { error: updateErr } = await supabase
-    .from('wallets')
-    .update({
-      balance: Number(wallet.balance || 0) + amount,
-      available_balance: Number(wallet.available_balance || 0) + amount
-    })
-    .eq('id', wallet.id)
-  if (updateErr) {
+  try {
+    await walletAdd(wallet, amount)
+  } catch (updateErr) {
     // فشل الرصيد بعد القيد: نحذف القيد كي لا يبقى أثر ناقص
     await supabase.from('wallet_transactions').delete().eq('id', tx.id)
     throw updateErr
@@ -267,14 +288,7 @@ async function creditDeliveredOrder(order_id) {
 
     if (!order || order.status !== 'delivered') return
 
-    // درع الازدواج: قيد سابق لنفس الطلب = لا شيء يُعاد
-    const { data: existing } = await supabase
-      .from('wallet_transactions')
-      .select('id')
-      .eq('order_id', order_id)
-      .eq('type', 'order_earning')
-      .limit(1)
-    if (existing && existing.length > 0) return
+    // درع الازدواج صار داخل creditWallet لكل مستخدم (شيف ومندوب كلٌ على حدة)
 
     const shortId = String(order.id).slice(0, 8)
 

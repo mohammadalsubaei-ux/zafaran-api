@@ -54,6 +54,15 @@ router.patch('/:id', requireUser, async (req, res) => {
   try {
     const { label, address, lat, lng, is_default } = req.body
 
+    // التحقق من الملكية أولاً — كان عنوان شخص آخر يمسح افتراضي المستخدم ثم يفشل بخطأ 500
+    const { data: own } = await supabase
+      .from('addresses')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('user_id', req.userId)
+      .maybeSingle()
+    if (!own) return res.status(404).json({ success: false, message: 'العنوان غير موجود' })
+
     if (is_default) {
       await supabase.from('addresses')
         .update({ is_default: false })

@@ -4,6 +4,11 @@ const cors    = require('cors')
 const app     = express()
 const path    = require('path')
 
+// Railway يمرر الطلبات عبر وكيل واحد: بدون هذا يكون req.ip عنوان الوكيل لكل
+// المستخدمين، فيصير حد المحاولات مشتركاً بين الجميع (10 طلبات رمز من أي شخص
+// تقفل الدخول على المنصة كلها). TRUST_PROXY_HOPS لتعديل العدد إن تغيرت البنية.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1))
+
 // ── Middleware ──
 // ترويسات أمان أساسية — بلا مكتبة إضافية
 app.use((req, res, next) => {

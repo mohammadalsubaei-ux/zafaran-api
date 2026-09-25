@@ -92,8 +92,23 @@ function money(value) {
   return n.toFixed(2) + " ر.س";
 }
 
+// يهرّب أيضاً علامات التنصيص — الطريقة القديمة (textContent → innerHTML) لا تهرّب " و '
+// فكانت القيم داخل value="..." أو href="..." قابلة لحقن سمات وتنفيذ كود.
 function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text == null ? "" : String(text);
-  return div.innerHTML;
+  return (text == null ? "" : String(text))
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// رابط آمن للعرض: https فقط، وإلا لا شيء
+function safeUrl(url) {
+  try {
+    const u = new URL(String(url || ""));
+    return u.protocol === "https:" ? u.href : "";
+  } catch {
+    return "";
+  }
 }

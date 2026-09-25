@@ -28,6 +28,11 @@ router.post('/', requireUser, async (req, res) => {
     if (!chef_id || !name || !price)
       return res.status(400).json({ success: false, message: 'chef_id والاسم والسعر مطلوبان' })
 
+    // السعر رقم موجب — سعر سالب كان يخفض إجمالي الطلب وحصة الشيف
+    const priceNum = Number(price)
+    if (!Number.isFinite(priceNum) || priceNum <= 0 || priceNum > 100000)
+      return res.status(400).json({ success: false, message: 'السعر غير صحيح' })
+
     // بلا هذا الفحص ينشئ أي شخص منتجاً في متجر غيره
     if (!(await assertChefOwner(req, res, chef_id))) return
 
@@ -39,7 +44,7 @@ router.post('/', requireUser, async (req, res) => {
     const { data, error } = await supabase
       .from('menu_items')
       .insert({
-        chef_id, name, price,
+        chef_id, name, price: priceNum,
         category:    category || 'rice',
         status:      finalStatus,
         prep_hours:  prep_hours || 0,
@@ -69,7 +74,12 @@ router.patch('/:id', requireUser, async (req, res) => {
 
     const updates = {}
     if (name)                          updates.name         = name
-    if (price)                         updates.price        = price
+    if (price) {
+      const priceNum = Number(price)
+      if (!Number.isFinite(priceNum) || priceNum <= 0 || priceNum > 100000)
+        return res.status(400).json({ success: false, message: 'السعر غير صحيح' })
+      updates.price = priceNum
+    }
     if (category)                      updates.category     = category
     if (status)                        updates.status       = status
     if (typeof prep_hours   !== 'undefined') updates.prep_hours   = Number(prep_hours ?? 0)

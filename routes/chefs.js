@@ -1,9 +1,28 @@
 const express = require('express')
-const { requireUser, assertChefOwner } = require('../auth')
+const { requireUser, viewerId, assertChefOwner } = require('../auth')
 const { tierOf } = require('../tiers')
 const { isPlanLive, planStatus } = require('../plans')
 const router = express.Router()
 const supabase = require('../supabase')
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  حقول خاصة بصاحب المتجر — لا تظهر في المسارات العامة
+//  (كانت تُرجع IBAN واسم الحساب ورابط الشهادة وجوال الشيف لأي زائر)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const PRIVATE_CHEF_FIELDS = ['iban', 'bank_account_name', 'freelance_cert_url']
+
+function redactChef(chef, viewer) {
+  if (!chef) return chef
+  if (viewer && String(chef.user_id) === String(viewer)) return chef
+
+  const out = { ...chef }
+  for (const f of PRIVATE_CHEF_FIELDS) delete out[f]
+  if (out.users && typeof out.users === 'object') {
+    out.users = { ...out.users }
+    delete out.users.phone
+  }
+  return out
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  GET /chefs/search?q= — بحث شامل
@@ -39,12 +58,18 @@ router.get('/search', async (req, res) => {
       .neq('status', 'closed')
       .eq('is_verified', true)
 
-    const orParts = [`city.ilike.%${q}%`, `neighborhood.ilike.%${q}%`]
+    // فلتر or نصي: الفاصلة والأقواس تضيف شروطاً، و% _ \ أحرف بدل — ننظفها
+    const qFilter = q.replace(/[,()\\%_*]/g, ' ').trim()
+    const orParts = qFilter
+      ? [`city.ilike.%${qFilter}%`, `neighborhood.ilike.%${qFilter}%`]
+      : []
     if (matchedUserIds.length > 0) {
       orParts.push(`user_id.in.(${matchedUserIds.join(',')})`)
     }
 
-    const { data: chefsByInfo } = await chefQuery.or(orParts.join(','))
+    const { data: chefsByInfo } = orParts.length > 0
+      ? await chefQuery.or(orParts.join(','))
+      : { data: [] }
 
     ;(chefsByInfo || []).forEach(chef => {
       const menu = (chef.menu || []).filter(m => m.status !== 'unavailable')
@@ -78,7 +103,8 @@ router.get('/search', async (req, res) => {
       }
     })
 
-    res.json({ success: true, data: Array.from(chefsMap.values()) })
+    const viewer = await viewerId(req)
+    res.json({ success: true, data: Array.from(chefsMap.values()).map(ch => redactChef(ch, viewer)) })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
@@ -266,7 +292,8 @@ router.get('/', async (req, res) => {
       })().catch(() => {})
     }
 
-    res.json({ success: true, data: scored })
+    const viewer = await viewerId(req)
+    res.json({ success: true, data: scored.map(ch => redactChef(ch, viewer)) })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
@@ -340,10 +367,11 @@ router.get('/:id', async (req, res) => {
       .limit(1)
       .maybeSingle()
 
+    const viewer = await viewerId(req)
     res.json({
       success: true,
       data: {
-        ...chef,
+        ...redactChef(chef, viewer),
         menu,
         offers,
         tier: tierOf(chef),
@@ -608,7 +636,13 @@ router.patch('/:id/freelance-cert', requireUser, async (req, res) => {
 
     const { cert_url } = req.body
 
-    if (!cert_url || typeof cert_url !== 'string' || !cert_url.startsWith('https://')) {
+    // تحقق حقيقي من الرابط (كان startsWith فقط، فيمر رابط فيه علامات تنصيص يُحقن في لوحة الأدمن)
+    let certOk = false
+    try {
+      const u = new URL(String(cert_url || ''))
+      certOk = u.protocol === 'https:' && !/["'<>\s]/.test(String(cert_url))
+    } catch { certOk = false }
+    if (!cert_url || typeof cert_url !== 'string' || !certOk) {
       return res.status(400).json({ success: false, message: 'رابط الشهادة غير صالح' })
     }
 

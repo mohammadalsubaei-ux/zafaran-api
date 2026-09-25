@@ -91,6 +91,26 @@ async function requireUser(req, res, next) {
   }
 }
 
+// ━━ هوية اختيارية: للمسارات العامة التي تعرض حقولاً إضافية لصاحب المورد فقط ━━
+// لا ترد بخطأ أبداً — ترجع user_id لجلسة صالحة، أو null
+async function viewerId(req) {
+  try {
+    const token = bearer(req)
+    if (!token) return null
+
+    const { data: session } = await supabase
+      .from('user_sessions')
+      .select('user_id, expires_at')
+      .eq('token', token)
+      .maybeSingle()
+
+    if (!session || new Date(session.expires_at) < new Date()) return null
+    return session.user_id
+  } catch {
+    return null
+  }
+}
+
 // ━━ التحقق من أن المورد يخص صاحب الجلسة ━━
 
 // يرجع true إن كان مصرحاً، وإلا يرد 403 ويرجع false
@@ -210,6 +230,7 @@ module.exports = {
   issueSession,
   revokeSession,
   requireUser,
+  viewerId,
   assertSelf,
   chefOfUser,
   assertChefOwner,

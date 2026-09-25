@@ -75,6 +75,8 @@ router.get('/:id/orders', requireUser, async (req, res) => {
       platform_fee: undefined,
       chef_share: undefined,
       discount_amount: undefined,
+      // بيانات الشيف البنكية لا تخص المندوب
+      chefs: o.chefs ? { ...o.chefs, iban: undefined, bank_account_name: undefined, freelance_cert_url: undefined } : o.chefs,
       order_items: (o.order_items || []).map(it => ({
         id: it.id,
         name: it.name,
@@ -166,9 +168,14 @@ router.post('/:id/delivered/:order_id', requireUser, async (req, res) => {
       .from('orders')
       .update({ status: 'delivered', delivered_at: new Date() })
       .eq('id', order_id)
+      .eq('status', 'delivering')
       .select()
-      .single()
+      .maybeSingle()
     if (updateErr) throw updateErr
+    // ضغطتان متزامنتان على "تم التسليم" (أو إلغاء من الأدمن في الأثناء): لا نجد الطلب قيد التوصيل
+    if (!updated) {
+      return res.status(409).json({ success: false, message: 'تغيّرت حالة الطلب (سُلّم أو أُلغي) — حدّث الصفحة' })
+    }
     // العدادات (total_deliveries / total_earnings) وإرجاع الحالة "متاح" يحدّثها الآن
     // trigger قاعدة البيانات الموحّد (trg_delivery_stats) لحظة التسليم من أي مسار —
     // لا نلمسها هنا إطلاقاً لتجنب العدّ المزدوج
@@ -188,12 +195,34 @@ router.post('/:id/delivered/:order_id', requireUser, async (req, res) => {
   }
 })
 
+// المندوب يكتب موقعه على طلب مسند له وقيد التوصيل فقط
+// (كان يكفي أن يملك حساب المندوب، فيزوّر تتبع طلب أي عميل)
+async function isAssignedDelivering(orderId, driverId) {
+  const { data: order } = await supabase
+    .from('orders')
+    .select('driver_id, status')
+    .eq('id', orderId)
+    .maybeSingle()
+  return !!order && String(order.driver_id) === String(driverId) && order.status === 'delivering'
+}
+
+function validCoords(lat, lng) {
+  const la = Number(lat), ln = Number(lng)
+  return Number.isFinite(la) && Number.isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180
+}
+
 router.patch('/:id/location', requireUser, async (req, res) => {
   try {
     if (!(await assertDriverOwner(req, res, req.params.id))) return
 
     const { lat, lng, heading, speed, order_id } = req.body
     if (order_id) {
+      if (!validCoords(lat, lng)) {
+        return res.status(400).json({ success: false, message: 'بيانات الموقع غير صحيحة' })
+      }
+      if (!(await isAssignedDelivering(order_id, req.params.id))) {
+        return res.status(403).json({ success: false, message: 'هذا الطلب غير مسند لك' })
+      }
       await supabase.from('driver_locations').upsert({
         order_id,
         driver_id: req.params.id,
