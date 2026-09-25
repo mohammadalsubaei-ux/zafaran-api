@@ -100,8 +100,14 @@ async function verifyOtp(local, otp) {
 // التحقق منه، فنُصدر تذكرة موقّعة تثبت أن هذا الرقم تحقّق قبل دقائق.
 const TICKET_TTL_MS = 10 * 60 * 1000
 
+// بدون سرّ ولا مفتاح كان السرّ نصاً معروفاً ('zafaran-otp:') فيمكن تزوير تذكرة لأي رقم.
+// الآن: سرّ عشوائي لعمر العملية (التذكرة تعيش 10 دقائق فقط فلا ضرر).
+const PROCESS_SECRET = crypto.randomBytes(32).toString('hex')
+
 function ticketSecret() {
-  return process.env.OTP_TICKET_SECRET || ('zafaran-otp:' + apiKey())
+  if (process.env.OTP_TICKET_SECRET) return process.env.OTP_TICKET_SECRET
+  if (apiKey()) return 'zafaran-otp:' + apiKey()
+  return PROCESS_SECRET
 }
 
 function sign(payload) {
@@ -146,9 +152,43 @@ function phoneAllowed(local) {
   return rec.count <= PHONE_MAX
 }
 
+// ━━ قفل التحقق لكل رقم بعد محاولات خاطئة ━━
+// حد الـIP وحده لا يكفي: من يملك عناوين كثيرة يجرّب رموزاً بلا نهاية على رقم واحد
+// (ومنها رقم الاختبار ذو الرمز الثابت). بعد 5 أخطاء خلال 15 دقيقة يُقفل الرقم 15 دقيقة.
+// ملاحظة: العدّاد في الذاكرة ويُصفَّر مع إعادة النشر — يكفي لخادم واحد.
+const failures = new Map()
+const FAIL_WINDOW_MS = 15 * 60 * 1000
+const FAIL_MAX = 5
+const LOCK_MS = 15 * 60 * 1000
+
+// كم دقيقة متبقية على القفل (0 = غير مقفل)
+function lockedMinutes(local) {
+  const rec = failures.get(local)
+  if (!rec || !rec.lockedUntil) return 0
+  const left = rec.lockedUntil - Date.now()
+  if (left <= 0) { failures.delete(local); return 0 }
+  return Math.ceil(left / 60000)
+}
+
+function recordFailure(local) {
+  const now = Date.now()
+  let rec = failures.get(local)
+  if (!rec || now > rec.resetAt) {
+    rec = { count: 0, resetAt: now + FAIL_WINDOW_MS, lockedUntil: 0 }
+    failures.set(local, rec)
+  }
+  rec.count += 1
+  if (rec.count >= FAIL_MAX) rec.lockedUntil = now + LOCK_MS
+}
+
+function clearFailures(local) {
+  failures.delete(local)
+}
+
 setInterval(() => {
   const now = Date.now()
   for (const [k, v] of perPhone) if (now > v.resetAt) perPhone.delete(k)
+  for (const [k, v] of failures) if (now > v.resetAt && (!v.lockedUntil || now > v.lockedUntil)) failures.delete(k)
 }, 10 * 60 * 1000).unref?.()
 
 module.exports = {
@@ -159,4 +199,7 @@ module.exports = {
   issueTicket,
   readTicket,
   phoneAllowed,
+  lockedMinutes,
+  recordFailure,
+  clearFailures,
 }
