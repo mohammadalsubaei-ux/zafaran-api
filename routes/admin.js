@@ -22,34 +22,68 @@ function generateToken() {
   return crypto.randomBytes(32).toString('hex')
 }
 
+// الجلسات تُخزَّن كبصمة sha256 لا كنص صريح: تسرّب جدول admin_sessions لا يعطي دخولاً
+// (الجلسات القديمة المخزنة كنص صريح تتوقف — الأدمن يسجّل دخوله مرة واحدة بعد التحديث)
+function tokenHash(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex')
+}
+
+function bearerToken(req) {
+  const h = req.headers.authorization || ''
+  return h.startsWith('Bearer ') ? h.slice(7).trim() : null
+}
+
+// مقارنة ثابتة الزمن — !== تكشف بالتوقيت كم حرفاً تطابق
+function safeEqualHex(a, b) {
+  const x = Buffer.from(String(a || ''), 'hex')
+  const y = Buffer.from(String(b || ''), 'hex')
+  return x.length > 0 && x.length === y.length && crypto.timingSafeEqual(x, y)
+}
+
+// ملح وهمي ثابت لعمل scrypt حتى مع اسم مستخدم غير موجود (لا يكشف التوقيت وجود الحساب)
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex')
+
+// لون بصيغة #RRGGBB فقط — يُحقن في style ويصل للتطبيق، فقيمة عشوائية تكسر العرض
+function safeColor(v, fallback) {
+  return /^#[0-9a-f]{6}$/i.test(String(v || '')) ? v : fallback
+}
+
+// البحث بالبصمة فقط. لا رجوع للنص الصريح: لو قُبل، يستطيع من يملك نسخة مسرّبة من
+// الجدول إرسال البصمة نفسها كرمز. الثمن: تسجيل دخول الأدمن مرة واحدة بعد هذا التحديث.
+async function findAdminSession(token) {
+  const hashed = tokenHash(token)
+  const { data: session } = await supabase
+    .from('admin_sessions')
+    .select('admin_id, expires_at')
+    .eq('token', hashed)
+    .maybeSingle()
+  return session ? { session, stored: hashed } : { session: null, stored: null }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Middleware — يحمي كل endpoints الأدمن (عدا تسجيل الدخول)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async function requireAdmin(req, res, next) {
   try {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    const token = bearerToken(req)
 
     if (!token) {
       return res.status(401).json({ success: false, message: 'يلزم تسجيل الدخول' })
     }
 
-    const { data: session, error } = await supabase
-      .from('admin_sessions')
-      .select('admin_id, expires_at')
-      .eq('token', token)
-      .single()
+    const { session, stored } = await findAdminSession(token)
 
-    if (error || !session) {
+    if (!session) {
       return res.status(401).json({ success: false, message: 'جلسة غير صالحة، سجّل دخول مرة أخرى' })
     }
 
     if (new Date(session.expires_at) < new Date()) {
-      await supabase.from('admin_sessions').delete().eq('token', token)
+      await supabase.from('admin_sessions').delete().eq('token', stored)
       return res.status(401).json({ success: false, message: 'انتهت صلاحية الجلسة، سجّل دخول مرة أخرى' })
     }
 
     req.adminId = session.admin_id
+    req.adminSessionKey = stored
     next()
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
@@ -66,27 +100,25 @@ router.post('/auth/login', rateLimit({ max: 6, message: 'محاولات دخول
       return res.status(400).json({ success: false, message: 'اسم المستخدم وكلمة السر مطلوبان' })
     }
 
-    const { data: admin, error } = await supabase
+    const { data: admin } = await supabase
       .from('admins')
       .select('id, username, password_hash, password_salt')
-      .eq('username', username)
-      .single()
+      .eq('username', String(username))
+      .maybeSingle()
 
-    if (error || !admin) {
-      return res.status(401).json({ success: false, message: 'بيانات الدخول غير صحيحة' })
-    }
-
-    const computedHash = hashPassword(password, admin.password_salt)
-    if (computedHash !== admin.password_hash) {
+    // نحسب scrypt دائماً (حتى لو لم يوجد الحساب) كي لا يكشف زمن الرد صحة اسم المستخدم
+    const computedHash = hashPassword(String(password), admin?.password_salt || DUMMY_SALT)
+    if (!admin || !safeEqualHex(computedHash, admin.password_hash)) {
       return res.status(401).json({ success: false, message: 'بيانات الدخول غير صحيحة' })
     }
 
     const token = generateToken()
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS)
 
-    await supabase.from('admin_sessions').insert({
-      token, admin_id: admin.id, expires_at: expiresAt.toISOString()
+    const { error: sessErr } = await supabase.from('admin_sessions').insert({
+      token: tokenHash(token), admin_id: admin.id, expires_at: expiresAt.toISOString()
     })
+    if (sessErr) throw sessErr
 
     res.json({ success: true, data: { token, username: admin.username } })
   } catch (err) {
@@ -99,8 +131,7 @@ router.post('/auth/login', rateLimit({ max: 6, message: 'محاولات دخول
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.post('/auth/logout', requireAdmin, async (req, res) => {
   try {
-    const token = (req.headers.authorization || '').slice(7)
-    await supabase.from('admin_sessions').delete().eq('token', token)
+    await supabase.from('admin_sessions').delete().eq('token', req.adminSessionKey)
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
@@ -146,17 +177,25 @@ router.post('/auth/change-password', requireAdmin, async (req, res) => {
 
     if (error || !admin) throw error || new Error('لم يتم العثور على الحساب')
 
-    const currentHash = hashPassword(current_password, admin.password_salt)
-    if (currentHash !== admin.password_hash) {
+    const currentHash = hashPassword(String(current_password), admin.password_salt)
+    if (!safeEqualHex(currentHash, admin.password_hash)) {
       return res.status(401).json({ success: false, message: 'كلمة السر الحالية غير صحيحة' })
     }
 
     const newSalt = generateSalt()
-    const newHash = hashPassword(new_password, newSalt)
+    const newHash = hashPassword(String(new_password), newSalt)
 
-    await supabase.from('admins').update({
+    const { error: updErr } = await supabase.from('admins').update({
       password_hash: newHash, password_salt: newSalt
     }).eq('id', req.adminId)
+    if (updErr) throw updErr
+
+    // تغيير كلمة السر يُنهي كل الجلسات الأخرى (من سرق جلسة يخرج فوراً)؛ الجلسة الحالية تبقى
+    await supabase
+      .from('admin_sessions')
+      .delete()
+      .eq('admin_id', req.adminId)
+      .neq('token', req.adminSessionKey)
 
     res.json({ success: true, message: 'تم تغيير كلمة السر بنجاح' })
   } catch (err) {
@@ -201,7 +240,8 @@ router.get('/stats', requireAdmin, async (req, res) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 router.get('/orders', requireAdmin, async (req, res) => {
   try {
-    const { status, limit = 100 } = req.query
+    const { status } = req.query
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500)
 
     let query = supabase
       .from('orders')
@@ -541,6 +581,10 @@ router.get('/users/:id', requireAdmin, async (req, res) => {
     if (!user)
       return res.status(404).json({ success: false, message: 'المستخدم غير موجود' })
 
+    // لا نرسل بصمات كلمات المرور للمتصفح
+    delete user.password_hash
+    delete user.password_salt
+
     let profile = null
     if (user.role === 'chef') {
       const { data: rows } = await supabase
@@ -717,8 +761,8 @@ router.post('/banners', requireAdmin, async (req, res) => {
       .insert({
         title: title.trim(),
         subtitle: subtitle ? subtitle.trim() : null,
-        bg_color: bg_color || '#3E2410',
-        text_color: text_color || '#FDF0DC',
+        bg_color: safeColor(bg_color, '#3E2410'),
+        text_color: safeColor(text_color, '#FDF0DC'),
         target: target || null,
         sort_order: Number.isFinite(parseInt(sort_order)) ? parseInt(sort_order) : 0
       })
@@ -745,8 +789,8 @@ router.patch('/banners/:id', requireAdmin, async (req, res) => {
       updates.title = title.trim()
     }
     if (subtitle !== undefined)   updates.subtitle   = subtitle ? subtitle.trim() : null
-    if (bg_color !== undefined)   updates.bg_color   = bg_color || '#3E2410'
-    if (text_color !== undefined) updates.text_color = text_color || '#FDF0DC'
+    if (bg_color !== undefined)   updates.bg_color   = safeColor(bg_color, '#3E2410')
+    if (text_color !== undefined) updates.text_color = safeColor(text_color, '#FDF0DC')
     if (target !== undefined)     updates.target     = target || null
     if (sort_order !== undefined && Number.isFinite(parseInt(sort_order))) updates.sort_order = parseInt(sort_order)
     if (typeof is_active === 'boolean') updates.is_active = is_active

@@ -79,6 +79,26 @@ app.get('/.well-known/assetlinks.json', (req, res) => {
   ])
 })
 
+// لوحة الأدمن: سياسة محتوى تمنع تحميل سكربتات من الخارج وإرسال البيانات لأي نطاق آخر
+// (لو نجح حقن ما، لا يستطيع إرسال رمز الأدمن لخادم المهاجم عبر fetch أو الصور).
+// 'unsafe-inline' باقٍ لأن الصفحات تستخدم سكربتات وonclick داخلية.
+const ADMIN_API_ORIGIN = 'https://zafaran-backend-production.up.railway.app'
+app.use('/admin', (req, res, next) => {
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    `connect-src 'self' ${ADMIN_API_ORIGIN}`,
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '))
+  res.setHeader('Cache-Control', 'no-store')
+  next()
+})
 app.use('/admin', express.static(path.join(__dirname, 'public/admin')))
 app.use('/legal', express.static(path.join(__dirname, 'public/legal')))
 
