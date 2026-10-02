@@ -42,7 +42,7 @@ const ADMIN_TRANSITIONS = {
 async function getOrderCore(order_id) {
   const { data } = await supabase
     .from('orders')
-    .select('id, status, customer_id, chef_id, driver_id, delivery_address')
+    .select('id, status, customer_id, chef_id, driver_id, delivery_address, order_type, payment_method, payment_status')
     .eq('id', order_id)
     .single()
   return data || null

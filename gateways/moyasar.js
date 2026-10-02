@@ -51,20 +51,24 @@ async function call(method, path, body) {
   return json
 }
 
-async function createPayment({ order, returnUrl }) {
+async function createPayment({ order, returnUrl, expiresAt }) {
   const amount = toHalalas(order.total)
   if (!Number.isInteger(amount) || amount < 100) {
     throw new Error('order total below the gateway minimum (1 SAR)')
   }
 
-  const invoice = await call('POST', '/invoices', {
+  const body = {
     amount,
     currency: 'SAR',
     description: `طلب زعفران #${String(order.id).slice(0, 8)}`,
     success_url: returnUrl,
     back_url: returnUrl,
     metadata: { order_id: String(order.id) },
-  })
+  }
+  // صفحة الدفع تنتهي مع مهلة الطلب — لا يُدفع طلب أُلغي تلقائياً
+  if (expiresAt) body.expired_at = new Date(expiresAt).toISOString()
+
+  const invoice = await call('POST', '/invoices', body)
 
   if (!invoice?.id || !invoice?.url) throw new Error('moyasar returned no invoice url')
   return { url: invoice.url, ref: invoice.id }
