@@ -23,6 +23,7 @@ const supabase = require('../supabase')
 const notifyUser = require('../notify')
 const getSettings = require('../settings')
 const gateway = require('../gateway')
+const { isAwaitingPayment } = require('../paymentFlow')
 const { STATUS_AR, TERMINAL_STATUSES, CHEF_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 const { offerUsageAdd } = require('../atomic')
 
@@ -352,7 +353,8 @@ router.post('/', requireUser, async (req, res) => {
       }
     }
 
-    if (chefLocation) {
+    // الطلب الفوري بالدفع الإلكتروني لا يصل للمتجر إلا بعد تأكيد الدفع (paymentFlow.markPaid)
+    if (chefLocation && !isAwaitingPayment(order)) {
       await notifyUser(
         chefLocation.user_id,
         isPreorder ? 'طلب مسبق جديد — بانتظار تأكيد الوقت' : 'طلب جديد',
@@ -420,7 +422,8 @@ router.get('/chef/:id', requireUser, async (req, res) => {
       .range(offset, offset + limit - 1)
 
     if (error) throw error
-    res.json({ success: true, data })
+    // طلبات إلكترونية لم تُدفع بعد لا تظهر للمتجر (تظهر بعد الدفع أو تُلغى تلقائياً)
+    res.json({ success: true, data: (data || []).filter(o => !isAwaitingPayment(o)) })
   } catch (err) {
     res.status(500).json({ success: false, message: 'تعذر إتمام العملية — حاول مرة ثانية' })
   }
@@ -664,9 +667,15 @@ router.patch('/:id/status', requireUser, async (req, res) => {
       const updated = await applyStatusChange(order, 'cancelled', {
         cancel_reason: cancel_reason && cancel_reason.trim() ? cancel_reason.trim() : 'ألغاه العميل',
         cancelled_by: 'customer',
-        notifyChef: true
+        // المتجر لم يرَ الطلب الإلكتروني غير المدفوع أصلاً — لا داعي لإشعاره
+        notifyChef: !isAwaitingPayment(order)
       })
       return res.json({ success: true, data: updated })
+    }
+
+    // المتجر لا يتصرف في طلب إلكتروني لم يُدفع بعد (لا يراه أصلاً في لوحته)
+    if (isAwaitingPayment(order)) {
+      return res.status(409).json({ success: false, message: 'الطلب بانتظار دفع العميل' })
     }
 
     // استلام شخصي: الشيف يوثق تسليم العميل بنفسه من حالة "جاهز" فقط

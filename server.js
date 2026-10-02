@@ -149,6 +149,9 @@ app.use((err, req, res, next) => {
 // ── Start ──
 const PORT = process.env.PORT || 3000
 
+// مراجعة دورية للطلبات المدفوعة إلكترونياً: تأكيد الدفع أو الإلغاء بعد المهلة
+require('./paymentFlow').startPaymentSweeper()
+
 app.listen(PORT, () => {
   console.log(`\nزعفران API شغّال على http://localhost:${PORT}\n`)
 })

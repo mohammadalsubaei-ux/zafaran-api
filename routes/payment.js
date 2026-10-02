@@ -3,6 +3,7 @@ const { requireUser } = require('../auth')
 const router = express.Router()
 const supabase = require('../supabase')
 const gateway = require('../gateway')
+const { markPaid, PAYMENT_WINDOW_MIN } = require('../paymentFlow')
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  الدفع الإلكتروني عبر صفحة مستضافة — انظر gateway.js
@@ -28,7 +29,7 @@ function baseUrl(req) {
 async function loadOwnOrder(req, res, orderId) {
   const { data: order, error } = await supabase
     .from('orders')
-    .select('id, total, payment_status, payment_method, payment_transaction_id, customer_id')
+    .select('id, total, payment_status, payment_method, payment_transaction_id, customer_id, chef_id, order_type, status, created_at')
     .eq('id', orderId)
     .maybeSingle()
 
@@ -62,9 +63,34 @@ router.post('/create', requireUser, async (req, res) => {
     if (!ONLINE_METHODS.includes(order.payment_method)) {
       return res.status(400).json({ success: false, message: 'هذا الطلب ليس بالدفع الإلكتروني' })
     }
+    if (order.status === 'cancelled') {
+      return res.status(409).json({ success: false, message: 'الطلب ملغى — أنشئ طلباً جديداً' })
+    }
+
+    // الطلب الفوري: صفحة الدفع تنتهي قبل الإلغاء التلقائي بدقيقة
+    let expiresAt = null
+    if (order.order_type !== 'preorder') {
+      expiresAt = new Date(new Date(order.created_at).getTime() + (PAYMENT_WINDOW_MIN - 1) * 60 * 1000)
+      if (expiresAt.getTime() < Date.now() + 60 * 1000) {
+        return res.status(409).json({ success: false, message: 'انتهت مهلة الدفع لهذا الطلب — أنشئ طلباً جديداً' })
+      }
+    }
+
+    // فاتورة سابقة لهذا الطلب: إن دُفعت نؤكد الطلب، وإن كانت مفتوحة نعيد رابطها.
+    // (إنشاء فاتورة جديدة كل مرة كان يستبدل المرجع، فلو دُفعت الأولى لا نراها أبداً)
+    if (order.payment_transaction_id) {
+      const prev = await gateway.lookupPayment({ ref: order.payment_transaction_id, order })
+      if (prev?.paid) {
+        await markPaid(order, prev.transaction_id)
+        return res.status(409).json({ success: false, code: 'ALREADY_PAID', message: 'تم دفع هذا الطلب مسبقاً' })
+      }
+      if (prev?.open && prev.url) {
+        return res.json({ success: true, data: { url: prev.url } })
+      }
+    }
 
     const returnUrl = `${baseUrl(req)}/api/payment/return?order=${encodeURIComponent(orderId)}`
-    const { url, ref } = await gateway.createPayment({ order, returnUrl })
+    const { url, ref } = await gateway.createPayment({ order, returnUrl, expiresAt })
 
     if (!url) throw new Error('gateway returned no url')
 
@@ -103,16 +129,21 @@ router.get('/status/:order_id', requireUser, async (req, res) => {
       return res.json({ success: true, data: { paid: false } })
     }
 
-    const { error: updErr } = await supabase
-      .from('orders')
-      .update({
-        payment_status: 'paid',
-        payment_transaction_id: result.transaction_id || order.payment_transaction_id,
-        paid_at: new Date().toISOString(),
-      })
-      .eq('id', orderId)
-      .neq('payment_status', 'paid')
-    if (updErr) throw updErr
+    // يعلّم الطلب مدفوعاً مرة واحدة ويُشعر المتجر (الطلب الفوري يصل للمتجر الآن فقط)
+    const confirmed = await markPaid(order, result.transaction_id)
+    if (!confirmed) {
+      // لم يُحدَّث الصف: إما دُفع للتو من مسار آخر (طبيعي)، أو أُلغي الطلب في الأثناء
+      const { data: fresh } = await supabase
+        .from('orders')
+        .select('status, payment_status')
+        .eq('id', orderId)
+        .maybeSingle()
+      if (fresh?.payment_status !== 'paid') {
+        // نادر: دُفع بعد الإلغاء التلقائي — يحتاج استرداداً من لوحة البوابة
+        console.error('[payment] PAID AFTER CANCEL — refund needed', orderId, result.transaction_id)
+        return res.json({ success: true, data: { paid: false, cancelled: true } })
+      }
+    }
 
     res.json({ success: true, data: { paid: true, transaction_id: result.transaction_id || order.payment_transaction_id } })
   } catch (err) {

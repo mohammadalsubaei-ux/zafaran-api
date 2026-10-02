@@ -5,6 +5,7 @@ const router = express.Router()
 const crypto = require('crypto')
 const supabase = require('../supabase')
 const { walletAdd, walletWithdraw } = require('../atomic')
+const { notifyChefIfWasHidden } = require('../paymentFlow')
 const notifyUser = require('../notify')
 const { STATUS_AR, TERMINAL_STATUSES, ADMIN_TRANSITIONS, getOrderCore, applyStatusChange } = require('../orderStatus')
 
@@ -1190,11 +1191,14 @@ router.patch('/orders/:id/payment', requireAdmin, async (req, res) => {
 
     const { data: order } = await supabase
       .from('orders')
-      .select('id, customer_id, payment_status, total')
+      .select('id, customer_id, chef_id, payment_status, payment_method, order_type, status, total')
       .eq('id', req.params.id)
       .maybeSingle()
 
     if (!order) return res.status(404).json({ success: false, message: 'الطلب غير موجود' })
+    if (payment_status === 'paid' && order.status === 'cancelled') {
+      return res.status(409).json({ success: false, message: 'الطلب ملغى — راجع الاسترداد بدل تعليمه مدفوعاً' })
+    }
 
     if (order.payment_status === payment_status) {
       return res.status(409).json({ success: false, message: 'الحالة كما هي' })
@@ -1214,6 +1218,7 @@ router.patch('/orders/:id/payment', requireAdmin, async (req, res) => {
     if (error) throw error
 
     if (payment_status === 'paid') {
+      await notifyChefIfWasHidden(order)
       await notifyUser(
         order.customer_id,
         'تم تأكيد الدفع',
