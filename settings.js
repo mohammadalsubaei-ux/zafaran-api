@@ -55,5 +55,25 @@ async function isDeliveryEnabled() {
   }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  مفتاح الدفع الإلكتروني — online_payments_enabled في app_settings
+//  نفس منطق التوصيل: "true" فقط يفعّله. التطبيق يقرأ نفس الإعداد ليظهر الخيار.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function isOnlinePaymentsEnabled() {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'online_payments_enabled')
+      .maybeSingle()
+    if (error || !data) return false
+    return String(data.value || '').trim().toLowerCase() === 'true'
+  } catch (err) {
+    console.error('isOnlinePaymentsEnabled failed, treating as disabled:', err.message)
+    return false
+  }
+}
+
 module.exports = getSettings
 module.exports.isDeliveryEnabled = isDeliveryEnabled
+module.exports.isOnlinePaymentsEnabled = isOnlinePaymentsEnabled
