@@ -667,7 +667,8 @@ router.patch('/:id/status', requireUser, async (req, res) => {
       const updated = await applyStatusChange(order, 'cancelled', {
         cancel_reason: cancel_reason && cancel_reason.trim() ? cancel_reason.trim() : 'ألغاه العميل',
         cancelled_by: 'customer',
-        notifyChef: true
+        // المتجر لم يرَ الطلب الإلكتروني غير المدفوع أصلاً — لا داعي لإشعاره
+        notifyChef: !isAwaitingPayment(order)
       })
       return res.json({ success: true, data: updated })
     }

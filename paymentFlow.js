@@ -71,6 +71,14 @@ async function markPaid(order, transactionId) {
   return true
 }
 
+// بعد تعليم الأدمن طلباً مدفوعاً يدوياً: إن كان طلباً إلكترونياً لم يره المتجر، نُشعره الآن
+async function notifyChefIfWasHidden(orderBefore) {
+  if (isAwaitingPayment(orderBefore) && orderBefore.status !== 'cancelled') {
+    await notifyChefOfPaidOrder(orderBefore).catch(err =>
+      console.error('[payment] chef notify failed', orderBefore.id, err.message))
+  }
+}
+
 // ━━ المراجعة الدورية ━━
 async function sweep() {
   const cutoff = new Date(Date.now() - PAYMENT_WINDOW_MIN * 60 * 1000)
@@ -81,6 +89,11 @@ async function sweep() {
     .eq('status', 'pending')
     .in('payment_method', ONLINE_METHODS)
     .neq('payment_status', 'paid')
+    // الطلبات المسبقة مستثناة في الاستعلام نفسه (لا تزاحم الفورية على حد الخمسين)؛
+    // null = طلبات قديمة جداً قبل هذا الحقل، تُعامل كفورية
+    .or('order_type.is.null,order_type.neq.preorder')
+    // نافذة يوم واحد: الطلبات الأقدم لا تُلمس آلياً (تُراجع يدوياً إن وُجدت)
+    .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
     .order('created_at', { ascending: true })
     .limit(50)
   if (error) throw error
@@ -102,6 +115,7 @@ async function sweep() {
       if (new Date(order.created_at) < cutoff) {
         await applyStatusChange(order, 'cancelled', {
           cancel_reason: `لم يكتمل الدفع خلال ${PAYMENT_WINDOW_MIN} دقيقة`,
+          requireUnpaid: true,
         })
       }
     } catch (err) {
@@ -126,4 +140,4 @@ function startPaymentSweeper() {
   }, SWEEP_EVERY_MS).unref?.()
 }
 
-module.exports = { PAYMENT_WINDOW_MIN, ONLINE_METHODS, isOnline, isAwaitingPayment, markPaid, sweep, startPaymentSweeper }
+module.exports = { PAYMENT_WINDOW_MIN, ONLINE_METHODS, isOnline, isAwaitingPayment, markPaid, notifyChefIfWasHidden, sweep, startPaymentSweeper }

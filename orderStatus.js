@@ -68,6 +68,8 @@ async function applyStatusChange(order, status, opts = {}) {
     .update(updates)
     .eq('id', order.id)
   if (order.status) query = query.eq('status', order.status)
+  // الإلغاء التلقائي لعدم الدفع: لا يُلغى طلب دُفع في الأثناء
+  if (opts.requireUnpaid) query = query.neq('payment_status', 'paid')
 
   const { data: updated, error } = await query
     .select('*')

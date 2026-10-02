@@ -39,4 +39,8 @@ module.exports = {
   enabled: Boolean(gateway),
   createPayment: (args) => gateway.createPayment(args),
   verifyPayment: (args) => gateway.verifyPayment(args),
+  // اختياري في المحوّل: حالة العملية الحالية (مدفوعة/مفتوحة + رابطها)
+  lookupPayment: (args) => (gateway && typeof gateway.lookupPayment === 'function'
+    ? gateway.lookupPayment(args)
+    : Promise.resolve(null)),
 }

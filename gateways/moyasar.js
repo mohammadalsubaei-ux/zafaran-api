@@ -74,31 +74,47 @@ async function createPayment({ order, returnUrl, expiresAt }) {
   return { url: invoice.url, ref: invoice.id }
 }
 
-async function verifyPayment({ ref, order }) {
-  if (!ref) return { paid: false }
-
-  const invoice = await call('GET', `/invoices/${encodeURIComponent(ref)}`)
-
-  if (String(invoice?.status || '').toLowerCase() !== 'paid') return { paid: false }
-
-  // الفاتورة المدفوعة يجب أن تطابق هذا الطلب بالضبط — لا نثق بمجرد "paid"
+// فاتورة مدفوعة تطابق هذا الطلب بالضبط؟ — لا نثق بمجرد "paid"
+function matchesOrder(invoice, order) {
   const expected = toHalalas(order.total)
   if (Number(invoice.amount) !== expected) {
     console.error('[moyasar] amount mismatch', { invoice: invoice.id, got: invoice.amount, expected })
-    return { paid: false }
+    return false
   }
   if (String(invoice.currency || '').toUpperCase() !== 'SAR') {
     console.error('[moyasar] currency mismatch', { invoice: invoice.id, currency: invoice.currency })
-    return { paid: false }
+    return false
   }
   const metaOrder = invoice.metadata?.order_id
   if (metaOrder && String(metaOrder) !== String(order.id)) {
     console.error('[moyasar] order mismatch', { invoice: invoice.id, metaOrder, order: order.id })
-    return { paid: false }
+    return false
   }
+  return true
+}
 
+async function verifyPayment({ ref, order }) {
+  if (!ref) return { paid: false }
+  const invoice = await call('GET', `/invoices/${encodeURIComponent(ref)}`)
+  if (String(invoice?.status || '').toLowerCase() !== 'paid') return { paid: false }
+  if (!matchesOrder(invoice, order)) return { paid: false }
   // نبقي معرّف الفاتورة مرجعاً (يمكن البحث عنه في لوحة ميسر، ومنه الوصول لعملية الدفع)
   return { paid: true, transaction_id: invoice.id }
 }
 
-module.exports = { createPayment, verifyPayment }
+// حالة الفاتورة الحالية للطلب: مدفوعة؟ ما زالت مفتوحة (نعيد رابطها بدل فاتورة ثانية)؟
+async function lookupPayment({ ref, order }) {
+  if (!ref) return { paid: false, open: false }
+  const invoice = await call('GET', `/invoices/${encodeURIComponent(ref)}`)
+  const status = String(invoice?.status || '').toLowerCase()
+  if (status === 'paid') {
+    return matchesOrder(invoice, order)
+      ? { paid: true, open: false, transaction_id: invoice.id }
+      : { paid: false, open: false }
+  }
+  const notExpired = !invoice.expired_at || new Date(invoice.expired_at).getTime() > Date.now() + 60 * 1000
+  const open = status === 'initiated' && notExpired && !!invoice.url && matchesOrder(invoice, order)
+  return { paid: false, open, url: open ? invoice.url : null }
+}
+
+module.exports = { createPayment, verifyPayment, lookupPayment }

@@ -76,6 +76,19 @@ router.post('/create', requireUser, async (req, res) => {
       }
     }
 
+    // فاتورة سابقة لهذا الطلب: إن دُفعت نؤكد الطلب، وإن كانت مفتوحة نعيد رابطها.
+    // (إنشاء فاتورة جديدة كل مرة كان يستبدل المرجع، فلو دُفعت الأولى لا نراها أبداً)
+    if (order.payment_transaction_id) {
+      const prev = await gateway.lookupPayment({ ref: order.payment_transaction_id, order })
+      if (prev?.paid) {
+        await markPaid(order, prev.transaction_id)
+        return res.status(409).json({ success: false, code: 'ALREADY_PAID', message: 'تم دفع هذا الطلب مسبقاً' })
+      }
+      if (prev?.open && prev.url) {
+        return res.json({ success: true, data: { url: prev.url } })
+      }
+    }
+
     const returnUrl = `${baseUrl(req)}/api/payment/return?order=${encodeURIComponent(orderId)}`
     const { url, ref } = await gateway.createPayment({ order, returnUrl, expiresAt })
 
@@ -118,10 +131,18 @@ router.get('/status/:order_id', requireUser, async (req, res) => {
 
     // يعلّم الطلب مدفوعاً مرة واحدة ويُشعر المتجر (الطلب الفوري يصل للمتجر الآن فقط)
     const confirmed = await markPaid(order, result.transaction_id)
-    if (!confirmed && order.status === 'cancelled') {
-      // نادر: دُفع بعد الإلغاء التلقائي — يحتاج استرداداً من لوحة البوابة
-      console.error('[payment] PAID AFTER CANCEL — refund needed', orderId, result.transaction_id)
-      return res.json({ success: true, data: { paid: false, cancelled: true } })
+    if (!confirmed) {
+      // لم يُحدَّث الصف: إما دُفع للتو من مسار آخر (طبيعي)، أو أُلغي الطلب في الأثناء
+      const { data: fresh } = await supabase
+        .from('orders')
+        .select('status, payment_status')
+        .eq('id', orderId)
+        .maybeSingle()
+      if (fresh?.payment_status !== 'paid') {
+        // نادر: دُفع بعد الإلغاء التلقائي — يحتاج استرداداً من لوحة البوابة
+        console.error('[payment] PAID AFTER CANCEL — refund needed', orderId, result.transaction_id)
+        return res.json({ success: true, data: { paid: false, cancelled: true } })
+      }
     }
 
     res.json({ success: true, data: { paid: true, transaction_id: result.transaction_id || order.payment_transaction_id } })
